@@ -91,6 +91,32 @@ const SAMPLE_PRESETS = [
   }
 ];
 
+// Map a stored fileType to a MIME type so downloads open correctly
+// (e.g. images don't get mislabelled as text/plain).
+function mimeForType(fileType?: string): string {
+  const t = (fileType || '').toLowerCase();
+  if (t.includes('png')) return 'image/png';
+  if (t.includes('jpg') || t.includes('jpeg')) return 'image/jpeg';
+  if (t.includes('gif')) return 'image/gif';
+  if (t.includes('pdf')) return 'application/pdf';
+  return 'text/plain';
+}
+
+// Stored payloads are base64 for uploads but raw text for seed data. Build a
+// data: URL that is correct for whichever encoding a version actually uses.
+function looksLikeBase64(s: string): boolean {
+  const compact = s.replace(/\s/g, '');
+  return compact.length > 0 && compact.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(compact);
+}
+
+function downloadHref(fileData: string | undefined, fileType?: string): string {
+  const mime = mimeForType(fileType);
+  const data = fileData || '';
+  return looksLikeBase64(data)
+    ? `data:${mime};base64,${data}`
+    : `data:${mime};charset=utf-8,${encodeURIComponent(data)}`;
+}
+
 export default function App() {
   // Global Workspace state
   const [users, setUsers] = useState<User[]>([]);
@@ -98,6 +124,12 @@ export default function App() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [folders, setFolders] = useState<FolderType[]>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
+  const [pendingApprovals, setPendingApprovals] = useState<(ApprovalRequest & {
+    documentTitle: string;
+    documentOwner: string;
+    documentType: string;
+    documentDepartment?: string;
+  })[]>([]);
   const [currentView, setCurrentView] = useState<string>('dashboard');
   
   // Navigation
@@ -156,15 +188,25 @@ export default function App() {
   const [decisionApprovalId, setDecisionApprovalId] = useState<string | null>(null);
   const [decisionComment, setDecisionComment] = useState('');
 
-  // Fetch Users & Initialize
+  // Fetch Users & Initialize. We establish a server-side session for the
+  // default profile so identity is carried by an HttpOnly cookie rather than
+  // spoofable request headers.
   useEffect(() => {
     fetch('/api/users')
       .then(res => res.json())
-      .then(data => {
+      .then((data: User[]) => {
         setUsers(data);
-        // Default current user to Mohamed Bangura (Staff)
         const staff = data.find((u: User) => u.id === 'staff-1') || data[0];
-        setCurrentUser(staff);
+        if (!staff) return;
+        fetch('/api/users/switch-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: staff.id })
+        })
+          .then(res => res.json())
+          .then(d => {
+            if (d.user) setCurrentUser(d.user);
+          });
       });
   }, []);
 
@@ -183,6 +225,14 @@ export default function App() {
     let filterType = 'active';
     if (currentView === 'trash') filterType = 'trash';
     if (currentView === 'archive') filterType = 'archive';
+    if (currentView === 'shared-with-me') filterType = 'shared';
+
+    // Approvals queue is fetched from a dedicated endpoint
+    if (currentView === 'pending-approval') {
+      fetch('/api/approvals/mine', { headers })
+        .then(res => res.json())
+        .then(data => setPendingApprovals(Array.isArray(data) ? data : []));
+    }
 
     // 1. Fetch Stats
     fetch('/api/stats', { headers })
@@ -192,7 +242,7 @@ export default function App() {
     // 2. Fetch Folders
     fetch('/api/folders', { headers })
       .then(res => res.json())
-      .then(data => setFolders(data));
+      .then(data => setFolders(Array.isArray(data) ? data : []));
 
     // 3. Fetch Documents
     let docsUrl = `/api/documents?filterType=${filterType}`;
@@ -219,7 +269,7 @@ export default function App() {
     fetch(docsUrl, { headers })
       .then(res => res.json())
       .then(data => {
-        setDocuments(data);
+        setDocuments(Array.isArray(data) ? data : []);
       });
 
     // If a document detail is open, sync that too
@@ -654,11 +704,16 @@ export default function App() {
     });
   };
 
-  // Submit decision on approval workflow
-  const handleApprovalDecision = (status: 'Approved' | 'Changes Requested' | 'Rejected') => {
-    if (!currentUser || !decisionApprovalId) return;
+  // Submit decision on approval workflow. The approval id is passed explicitly
+  // so the action does not depend on async state having settled.
+  const handleApprovalDecision = (
+    status: 'Approved' | 'Changes Requested' | 'Rejected',
+    approvalId?: string
+  ) => {
+    const targetId = approvalId || decisionApprovalId;
+    if (!currentUser || !targetId) return;
 
-    fetch(`/api/approvals/${decisionApprovalId}/decide`, {
+    fetch(`/api/approvals/${targetId}/decide`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -796,7 +851,7 @@ export default function App() {
               <RefreshCw className="w-6 h-6" />
             </div>
             <h3 className="font-display font-bold text-slate-800 mb-1">Analyzing scan stream...</h3>
-            <p className="text-xs text-slate-400 mb-4">Gemini 3.5-flash is performing OCR & tag indexing.</p>
+            <p className="text-xs text-slate-400 mb-4">Gemini 2.5 Flash is performing OCR & tag indexing.</p>
             <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
               <div className="bg-indigo-600 h-1.5 rounded-full transition-all duration-300" style={{ width: `${uploadProgress}%` }}></div>
             </div>
@@ -1069,7 +1124,7 @@ export default function App() {
                     <span>Intelligent Tag Tracker</span>
                   </h3>
                   <p className="text-[11px] text-slate-400 mb-4 font-medium leading-relaxed">
-                    DocuHub uses Gemini-3.5-flash to read documents and configure smart category metadata. Browse automated tags across active collections:
+                    DocuHub uses Gemini 2.5 Flash to read documents and configure smart category metadata. Browse automated tags across active collections:
                   </p>
                   
                   <div className="flex flex-wrap gap-2">
@@ -1098,7 +1153,7 @@ export default function App() {
           )}
 
           {/* 2. VIEW: MY DRIVE & FILE NAVIGATOR */}
-          {(currentView === 'my-drive' || currentView === 'starred' || currentView === 'approved-files' || currentView === 'archive' || currentView === 'trash') && (
+          {(currentView === 'my-drive' || currentView === 'starred' || currentView === 'approved-files' || currentView === 'archive' || currentView === 'trash' || currentView === 'shared-with-me') && (
             <div className="space-y-4">
               
               {/* Dynamic contextual title based on route view */}
@@ -1130,7 +1185,8 @@ export default function App() {
                       {currentView === 'approved-files' && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
                       {currentView === 'archive' && <Archive className="w-4 h-4 text-sky-500" />}
                       {currentView === 'trash' && <Trash2 className="w-4 h-4 text-slate-400" />}
-                      <span>{currentView.replace('-', ' ')} Overview</span>
+                      {currentView === 'shared-with-me' && <Clock className="w-4 h-4 text-indigo-500" />}
+                      <span>{currentView.replace(/-/g, ' ')} Overview</span>
                     </span>
                   )}
                 </div>
@@ -1293,6 +1349,75 @@ export default function App() {
                             </tr>
                           );
                         })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* VIEW: PENDING APPROVALS QUEUE */}
+          {currentView === 'pending-approval' && (
+            <div className="space-y-4">
+              <div className="flex flex-col">
+                <h2 className="text-xl font-display font-extrabold text-slate-800 tracking-tight">Approvals Awaiting Your Review</h2>
+                <p className="text-xs text-slate-400">Documents submitted to you as the assigned approver. Open one to record your verdict.</p>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden flex flex-col">
+                {pendingApprovals.length === 0 ? (
+                  <div className="p-16 text-center text-slate-400 flex flex-col items-center justify-center">
+                    <div className="w-12 h-12 rounded-full bg-slate-50 flex items-center justify-center text-slate-300 mb-3.5">
+                      <CheckSquare className="w-6 h-6" />
+                    </div>
+                    <h3 className="font-display font-bold text-slate-800 text-sm">Your approval queue is clear</h3>
+                    <p className="text-xs max-w-sm mt-1">No documents are currently waiting for your decision.</p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50/70 border-b border-indigo-50/50">
+                        <tr className="text-[10px] font-mono font-bold uppercase text-slate-400">
+                          <th className="py-3 px-4">Document</th>
+                          <th className="py-3 px-4">Requested By</th>
+                          <th className="py-3 px-4">Note</th>
+                          <th className="py-3 px-4">Submitted</th>
+                          <th className="py-3 px-4 text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-50 font-medium text-slate-600">
+                        {pendingApprovals.map(appr => (
+                          <tr key={appr.id} className="hover:bg-slate-50/80 transition-colors">
+                            <td className="py-3 px-4">
+                              <div className="flex items-center space-x-3">
+                                <div className="p-2 bg-amber-50 text-amber-600 rounded-lg shrink-0">
+                                  <FileText className="w-4 h-4" />
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="font-semibold text-slate-800 truncate max-w-[240px]">{appr.documentTitle}</p>
+                                  <p className="text-[9px] text-slate-400 mt-0.5">{appr.documentType} • {appr.documentDepartment || 'GLOBAL'}</p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 font-semibold text-slate-700">{appr.requestedByName}</td>
+                            <td className="py-3 px-4 text-[11px] text-slate-500 truncate max-w-[220px]" title={appr.requestComment}>
+                              {appr.requestComment}
+                            </td>
+                            <td className="py-3 px-4 text-slate-400 text-[10px] font-mono">
+                              {new Date(appr.createdAt).toLocaleDateString()}
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              <button
+                                onClick={() => setSelectedDocId(appr.documentId)}
+                                className="px-3 py-1.5 bg-indigo-600 text-white hover:bg-indigo-700 text-[10px] font-bold rounded-lg inline-flex items-center space-x-1"
+                              >
+                                <span>Review</span>
+                                <ArrowRight className="w-3 h-3 text-white" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
                       </tbody>
                     </table>
                   </div>
@@ -1501,10 +1626,7 @@ export default function App() {
                   <button
                     onClick={() => {
                       const appReq = docDetail.approvals.find(a => a.approverId === currentUser?.id && a.status === 'Pending Approval');
-                      if (appReq) {
-                        setDecisionApprovalId(appReq.id);
-                        setTimeout(() => handleApprovalDecision('Approved'), 100);
-                      }
+                      if (appReq) handleApprovalDecision('Approved', appReq.id);
                     }}
                     className="flex-1 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-bold"
                   >
@@ -1513,10 +1635,7 @@ export default function App() {
                   <button
                     onClick={() => {
                       const appReq = docDetail.approvals.find(a => a.approverId === currentUser?.id && a.status === 'Pending Approval');
-                      if (appReq) {
-                        setDecisionApprovalId(appReq.id);
-                        setTimeout(() => handleApprovalDecision('Changes Requested'), 100);
-                      }
+                      if (appReq) handleApprovalDecision('Changes Requested', appReq.id);
                     }}
                     className="flex-1 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-[10px] font-bold"
                   >
@@ -1525,10 +1644,7 @@ export default function App() {
                   <button
                     onClick={() => {
                       const appReq = docDetail.approvals.find(a => a.approverId === currentUser?.id && a.status === 'Pending Approval');
-                      if (appReq) {
-                        setDecisionApprovalId(appReq.id);
-                        setTimeout(() => handleApprovalDecision('Rejected'), 100);
-                      }
+                      if (appReq) handleApprovalDecision('Rejected', appReq.id);
                     }}
                     className="flex-1 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[10px] font-bold"
                   >
@@ -1557,20 +1673,36 @@ export default function App() {
             {docDetail.externalLinks && docDetail.externalLinks.length > 0 && (
               <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-3.5 space-y-2">
                 <span className="text-[10px] font-mono font-bold text-slate-400 uppercase block">Active Secure Remote Access Token Keys</span>
-                {docDetail.externalLinks.map(link => (
-                  <div key={link.id} className="flex justify-between items-center text-[10px] p-2 bg-white rounded-lg border border-slate-100">
-                    <div className="min-w-0">
-                      <p className="font-mono text-slate-500 font-bold truncate max-w-[150px]">{link.token}</p>
-                      <p className="text-[8px] text-slate-400 mt-0.5">Expires: {new Date(link.expiresAt).toLocaleDateString()}</p>
+                {docDetail.externalLinks.map(link => {
+                  const url = `${window.location.origin}/api/external/${link.token}`;
+                  return (
+                    <div key={link.id} className="text-[10px] p-2 bg-white rounded-lg border border-slate-100 space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <p className="font-mono text-slate-500 font-bold truncate max-w-[150px]" title={url}>{link.token}</p>
+                        <div className="flex items-center space-x-1.5 shrink-0">
+                          <button
+                            onClick={() => {
+                              navigator.clipboard?.writeText(url);
+                              triggerToast('Secure link copied to clipboard.', 'success');
+                            }}
+                            className="px-2 py-1 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 text-[8px] font-bold rounded"
+                          >
+                            Copy
+                          </button>
+                          <button
+                            onClick={() => handleRevokeExternalLink(link.token)}
+                            className="px-2 py-1 bg-rose-50 text-rose-600 hover:bg-rose-100 text-[8px] font-bold rounded"
+                          >
+                            Revoke
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-[8px] text-slate-400">
+                        Expires {new Date(link.expiresAt).toLocaleDateString()} • {link.accessCount} view{link.accessCount === 1 ? '' : 's'}
+                      </p>
                     </div>
-                    <button 
-                      onClick={() => handleRevokeExternalLink(link.token)}
-                      className="px-2 py-1 bg-rose-50 text-rose-600 hover:bg-rose-100 text-[8px] font-bold rounded"
-                    >
-                      Revoke
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 
@@ -1598,10 +1730,10 @@ export default function App() {
                       <p className="text-[8px] text-slate-400 mt-0.5">Uploaded by {ver.uploadedByName} • {(ver.fileSize / 1024).toFixed(1)} KB</p>
                     </div>
                     <a
-                      href={`data:text/plain;base64,${ver.fileData}`}
+                      href={downloadHref(ver.fileData, ver.fileType)}
                       download={ver.fileName}
                       className="p-1.5 bg-white border border-slate-150 hover:bg-slate-50 rounded-lg text-slate-500 hover:text-slate-800 transition-colors"
-                      title="Download source text file"
+                      title="Download file"
                     >
                       <Download className="w-3.5 h-3.5" />
                     </a>
@@ -1986,7 +2118,7 @@ function ActivityLogView() {
     fetch('/api/activity')
       .then(res => res.json())
       .then(data => {
-        setLogs(data);
+        setLogs(Array.isArray(data) ? data : []);
         setLoading(false);
       });
   };
