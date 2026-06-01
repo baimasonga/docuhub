@@ -1750,13 +1750,21 @@ async function startServer() {
   });
 }
 
-// Surface fatal errors clearly in the deploy logs instead of dying silently.
-process.on('uncaughtException', (err) => {
-  console.error('[fatal] uncaughtException:', err);
-});
-process.on('unhandledRejection', (reason) => {
-  console.error('[fatal] unhandledRejection:', reason);
-});
+// Surface fatal errors in the deploy logs, then exit so the platform restarts a
+// clean process. After an uncaughtException / unhandledRejection the process is
+// in an undefined state; staying alive (only logging) leaves a wedged server
+// that boots fine but stops answering requests. Fail fast and let Railway's
+// auto-restart bring up a healthy container instead.
+let shuttingDown = false;
+function fatal(label: string, err: unknown) {
+  console.error(`[fatal] ${label}:`, err);
+  if (shuttingDown) return;
+  shuttingDown = true;
+  // Give stderr a tick to flush before exiting.
+  setTimeout(() => process.exit(1), 100);
+}
+process.on('uncaughtException', (err) => fatal('uncaughtException', err));
+process.on('unhandledRejection', (reason) => fatal('unhandledRejection', reason));
 
 // Spark up
 startServer().catch((err) => {
