@@ -299,6 +299,79 @@ function mimeForType(fileType?: string): string {
   return 'text/plain';
 }
 
+// ----------------------------------------------------
+// Institution profile & automatic document filing
+// ----------------------------------------------------
+// The organization profile describes how this institution organizes its
+// records. The system uses it to auto-build a folder taxonomy and file each
+// uploaded document under  <Unit / Department>  →  <Category>  , creating any
+// missing folders on demand (and reusing existing ones).
+const ORG_PROFILE = {
+  name: 'SmartDocs Organization',
+  // The unit/department dimension. Documents are first filed under their unit.
+  units: ['Procurement', 'Finance', 'Administration', 'IT', 'Management', 'Compliance', 'Marketing'],
+  // Maps a document category (documentType) to a human-friendly folder name.
+  categoryFolders: {
+    Contract: 'Contracts',
+    Invoice: 'Invoices',
+    Memo: 'Memos & Correspondence',
+    Report: 'Reports',
+    Support: 'Support & Technical',
+    Other: 'General Documents'
+  } as Record<Document['documentType'], string>
+};
+
+function categoryFolderName(category: Document['documentType']): string {
+  return ORG_PROFILE.categoryFolders[category] || ORG_PROFILE.categoryFolders.Other;
+}
+
+function slugify(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'item';
+}
+
+// Find-or-create a folder by name under a given parent (within a department
+// scope). Reuses an existing match so we don't duplicate the seed taxonomy.
+function ensureFolder(
+  name: string,
+  parentFolderId: string | null,
+  department: string | undefined,
+  ownerId: string
+): Folder {
+  const existing = db.folders.find(
+    f =>
+      f.parentFolderId === parentFolderId &&
+      f.name.toLowerCase() === name.toLowerCase() &&
+      (department ? (f.department || undefined) === department : true)
+  );
+  if (existing) return existing;
+
+  const folder: Folder = {
+    id: `auto-${slugify(name)}-${slugify(parentFolderId || 'root')}-${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`,
+    name,
+    parentFolderId,
+    ownerId,
+    department,
+    createdAt: new Date().toISOString()
+  };
+  db.folders.push(folder);
+  return folder;
+}
+
+// Resolve (creating as needed) the destination folder for a document based on
+// the institution profile: Unit/Department -> Category. Returns the folder id
+// plus a human-readable path for logging / UI feedback.
+function resolveAutoFolder(
+  ownerId: string,
+  department: string | undefined,
+  category: Document['documentType']
+): { folderId: string; path: string } {
+  const unitName = department && department.trim() ? department.trim() : 'Unassigned Unit';
+  const unitFolder = ensureFolder(unitName, null, department, ownerId);
+  const categoryName = categoryFolderName(category);
+  const categoryFolder = ensureFolder(categoryName, unitFolder.id, department, ownerId);
+  return { folderId: categoryFolder.id, path: `${unitName} / ${categoryName}` };
+}
+
 // Heuristic: stored file payloads are base64 for uploads but raw text for the
 // seed data. Decide which so we can serve real bytes either way.
 function looksLikeBase64(s: string): boolean {
@@ -547,6 +620,14 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() });
 });
 
+// Institution profile that drives automatic document filing. The UI uses this
+// to preview the destination path and label the auto-file taxonomy.
+app.get('/api/org-profile', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  res.json(ORG_PROFILE);
+});
+
 // Get Database Info & Stats
 app.get('/api/stats', (req, res) => {
   const user = getUser(req);
@@ -737,19 +818,37 @@ app.post('/api/documents/upload', async (req, res) => {
   const userId = user.id;
   const dept = user.department;
 
-  const { title, description, folderId, documentType, fileName, fileSize, fileType, fileData, department } = req.body;
+  const { title, description, folderId, documentType, fileName, fileSize, fileType, fileData, department, autoFile } = req.body;
 
   if (!title || !fileName || !fileData) {
     return res.status(400).json({ error: 'Title, file name, and file data stream are required.' });
   }
 
+  // Auto-filing is on by default: the system routes the document into its
+  // Unit/Category folder. Pass autoFile === false to use an explicit folderId.
+  const useAutoFile = autoFile !== false;
+
   try {
     // 1. Run OCR and tags extraction
     const aiResult = await runAiOcrAndTagging(
-      fileName, 
-      fileType || 'text/plain', 
+      fileName,
+      fileType || 'text/plain',
       fileData
     );
+
+    // Resolve final classification, then route into a folder accordingly.
+    const finalCategory: Document['documentType'] = (documentType as any) || aiResult.documentType || 'Other';
+    const finalDept = department || dept;
+
+    let destinationFolderId: string | null;
+    let filedInto: string | null = null;
+    if (useAutoFile) {
+      const resolved = resolveAutoFolder(userId, finalDept, finalCategory);
+      destinationFolderId = resolved.folderId;
+      filedInto = resolved.path;
+    } else {
+      destinationFolderId = folderId || null;
+    }
 
     // 2. Insert Document
     const docId = `doc-${Date.now()}`;
@@ -759,9 +858,9 @@ app.post('/api/documents/upload', async (req, res) => {
       description: description || aiResult.description,
       ownerId: userId,
       ownerName: user.fullName,
-      department: department || dept,
-      folderId: folderId || null,
-      documentType: (documentType as any) || aiResult.documentType || 'Other',
+      department: finalDept,
+      folderId: destinationFolderId,
+      documentType: finalCategory,
       status: 'Draft', // initial state is draft
       confidentialityLevel: 'Normal File',
       currentVersion: 'v1',
@@ -793,12 +892,16 @@ app.post('/api/documents/upload', async (req, res) => {
     db.versions.push(newVersion);
     writeDb();
 
-    addAuditLog(userId, 'Upload', docId, title, `Uploaded first version "${fileName}" representing "${title}". AI-OCR detected type: ${newDoc.documentType}`);
+    const filingNote = filedInto
+      ? ` Auto-filed into "${filedInto}".`
+      : '';
+    addAuditLog(userId, 'Upload', docId, title, `Uploaded first version "${fileName}" representing "${title}". AI-OCR detected type: ${newDoc.documentType}.${filingNote}`);
 
     res.status(201).json({
       success: true,
       document: newDoc,
-      version: newVersion
+      version: newVersion,
+      filedInto
     });
 
   } catch (err: any) {

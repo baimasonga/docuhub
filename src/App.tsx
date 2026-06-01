@@ -168,6 +168,14 @@ export default function App() {
   const [upPresetIndex, setUpPresetIndex] = useState<number>(-1);
   const [upCustomFile, setUpCustomFile] = useState<{ name: string; content: string; size: number } | null>(null);
   const [upDept, setUpDept] = useState('');
+  const [upAutoFile, setUpAutoFile] = useState(true);
+
+  // Institution profile that drives automatic folder filing (Unit -> Category).
+  const [orgProfile, setOrgProfile] = useState<{
+    name: string;
+    units: string[];
+    categoryFolders: Record<string, string>;
+  } | null>(null);
 
   // Folder creation inputs
   const [folderName, setFolderName] = useState('');
@@ -281,6 +289,24 @@ export default function App() {
   useEffect(() => {
     reloadData();
   }, [currentUser, currentView, currentFolderId, searchQuery, categoryFilter, selectedDocId]);
+
+  // Load the institution profile once authenticated (drives auto-filing UI).
+  useEffect(() => {
+    if (!currentUser) return;
+    fetch('/api/org-profile')
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.categoryFolders) setOrgProfile(data);
+      })
+      .catch(() => {});
+  }, [currentUser]);
+
+  // Compute the folder path a document would be auto-filed into.
+  const autoFilePreview = (): string => {
+    const unit = (upDept || currentUser?.department || 'Unassigned Unit').trim() || 'Unassigned Unit';
+    const category = orgProfile?.categoryFolders?.[upCategory] || upCategory;
+    return `${unit} / ${category}`;
+  };
 
   // Fetch single doc detail
   const fetchDocDetail = (id: string) => {
@@ -420,7 +446,8 @@ export default function App() {
         fileSize: size,
         fileType: type,
         fileData: filedata,
-        department: upDept || currentUser.department
+        department: upDept || currentUser.department,
+        autoFile: upAutoFile
       })
     })
     .then(async (res) => {
@@ -432,13 +459,17 @@ export default function App() {
       if (data.error) {
         triggerToast(data.error, 'error');
       } else {
-        triggerToast(`Secure PDF Auto-ocr & tagging complete: "${data.document.title}" added with AI tags.`, 'success');
+        const msg = data.filedInto
+          ? `"${data.document.title}" indexed and auto-filed into ${data.filedInto}.`
+          : `"${data.document.title}" indexed with AI tags.`;
+        triggerToast(msg, 'success');
         setShowUploadModal(false);
         // reset fields
         setUpPresetIndex(-1);
         setUpTitle('');
         setUpDesc('');
         setUpCustomFile(null);
+        setUpAutoFile(true);
         reloadData();
       }
     })
@@ -876,6 +907,8 @@ export default function App() {
             setUpDesc('');
             setUpCategory('Other');
             setUpCustomFile(null);
+            setUpDept(currentUser.department);
+            setUpAutoFile(true);
             setShowUploadModal(true);
           }}
           onOpenCreateFolder={() => {
@@ -1889,9 +1922,9 @@ export default function App() {
                   </select>
                 </div>
 
-                {/* Scoped Department */}
+                {/* Scoped Department / Unit */}
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Department Scope</label>
+                  <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Unit / Department</label>
                   <input
                     type="text"
                     placeholder={currentUser.department || "e.g. Procurement"}
@@ -1900,6 +1933,39 @@ export default function App() {
                     className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none"
                   />
                 </div>
+              </div>
+
+              {/* Automatic Smart Filing */}
+              <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 space-y-2">
+                <label className="flex items-start space-x-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={upAutoFile}
+                    onChange={(e) => setUpAutoFile(e.target.checked)}
+                    className="mt-0.5 accent-indigo-600 w-3.5 h-3.5"
+                  />
+                  <span>
+                    <span className="flex items-center space-x-1 text-[11px] font-bold text-indigo-800">
+                      <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Auto-file into smart folders</span>
+                    </span>
+                    <span className="block text-[10px] text-slate-500 mt-0.5 leading-relaxed">
+                      The system organizes this document by unit and category based on the institution profile{orgProfile?.name ? ` (${orgProfile.name})` : ''}.
+                    </span>
+                  </span>
+                </label>
+
+                {upAutoFile ? (
+                  <div className="flex items-center space-x-2 text-[10px] bg-white rounded-lg border border-indigo-100 px-2.5 py-1.5">
+                    <CornerDownRight className="w-3 h-3 text-indigo-500 shrink-0" />
+                    <span className="text-slate-400 font-mono uppercase tracking-wider text-[9px]">Destination</span>
+                    <span className="font-bold text-indigo-700 truncate">{autoFilePreview()}</span>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-slate-500 pl-6">
+                    Will be placed in the current location ({currentFolderId ? (folders.find(f => f.id === currentFolderId)?.name || 'selected folder') : 'My Drive / Root'}).
+                  </p>
+                )}
               </div>
 
               <button
