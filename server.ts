@@ -6,7 +6,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import { createServer as createViteServer } from 'vite';
+import os from 'os';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import { 
@@ -36,15 +36,30 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // DB File Path. DATA_DIR lets the JSON datastore live on a mounted persistent
 // volume in production (e.g. a Railway volume at /data) so it survives deploys.
-const DB_DIR = process.env.DATA_DIR
-  ? path.resolve(process.env.DATA_DIR)
-  : path.join(process.cwd(), 'data');
-const DB_FILE = path.join(DB_DIR, 'db.json');
-
-// Ensure db directory and file exist
-if (!fs.existsSync(DB_DIR)) {
-  fs.mkdirSync(DB_DIR, { recursive: true });
+// We resolve a writable directory at startup: try DATA_DIR (or ./data), and if
+// it can't be created/written (e.g. the volume isn't mounted yet), fall back to
+// a temp dir so the server still boots instead of crash-looping with a 502.
+function resolveDataDir(): string {
+  const candidates = [
+    process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(process.cwd(), 'data'),
+    path.join(os.tmpdir(), 'docuhub-data')
+  ];
+  for (const dir of candidates) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.accessSync(dir, fs.constants.W_OK);
+      return dir;
+    } catch (err) {
+      console.error(`[startup] data directory "${dir}" is not usable, trying fallback.`, (err as Error).message);
+    }
+  }
+  // Last resort: current working directory (always writable in the container).
+  return process.cwd();
 }
+
+const DB_DIR = resolveDataDir();
+const DB_FILE = path.join(DB_DIR, 'db.json');
+console.log(`[startup] Using data directory: ${DB_DIR}`);
 
 // Initial Mock Data
 const DEFAULT_INSTITUTION_ID = 'inst-smartdocs';
@@ -1635,9 +1650,12 @@ app.get('/api/external/:token', (req, res) => {
   return res.send(buffer);
 });
 
-// Initialize Vite and setup HTML serving
+// Initialize Vite (dev) or static serving (production) and start listening.
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
+    // Vite is a dev-only dependency for the API server; load it lazily so a
+    // production bundle never requires it at startup.
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -1660,5 +1678,16 @@ async function startServer() {
   });
 }
 
+// Surface fatal errors clearly in the deploy logs instead of dying silently.
+process.on('uncaughtException', (err) => {
+  console.error('[fatal] uncaughtException:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[fatal] unhandledRejection:', reason);
+});
+
 // Spark up
-startServer();
+startServer().catch((err) => {
+  console.error('[fatal] Failed to start server:', err);
+  process.exit(1);
+});
