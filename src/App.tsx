@@ -55,7 +55,8 @@ import {
   ActivityLog, 
   Comment,
   ExternalShareLink,
-  DashboardStats 
+  DashboardStats,
+  Institution
 } from './types';
 import Sidebar from './components/Sidebar';
 
@@ -170,11 +171,14 @@ export default function App() {
   const [upDept, setUpDept] = useState('');
   const [upAutoFile, setUpAutoFile] = useState(true);
 
-  // Institution profile that drives automatic folder filing (Unit -> Category).
+  // Institution profile that drives automatic folder filing (Unit -> Category
+  // [-> Activity]).
   const [orgProfile, setOrgProfile] = useState<{
+    id: string;
     name: string;
     units: string[];
     categoryFolders: Record<string, string>;
+    activityDimension: 'none' | 'ai-activity';
   } | null>(null);
 
   // Folder creation inputs
@@ -293,7 +297,7 @@ export default function App() {
   // Load the institution profile once authenticated (drives auto-filing UI).
   useEffect(() => {
     if (!currentUser) return;
-    fetch('/api/org-profile')
+    fetch('/api/institution')
       .then(res => res.json())
       .then(data => {
         if (data && data.categoryFolders) setOrgProfile(data);
@@ -305,7 +309,8 @@ export default function App() {
   const autoFilePreview = (): string => {
     const unit = (upDept || currentUser?.department || 'Unassigned Unit').trim() || 'Unassigned Unit';
     const category = orgProfile?.categoryFolders?.[upCategory] || upCategory;
-    return `${unit} / ${category}`;
+    const base = `${unit} / ${category}`;
+    return orgProfile?.activityDimension === 'ai-activity' ? `${base} / …activity (auto)` : base;
   };
 
   // Fetch single doc detail
@@ -1529,6 +1534,18 @@ export default function App() {
             </div>
           )}
 
+          {/* VIEW: INSTITUTION PROFILE (auto-filing taxonomy) */}
+          {currentView === 'institution' && currentUser && (
+            <InstitutionProfileView
+              currentUser={currentUser}
+              onSaved={(inst) => {
+                setOrgProfile(inst);
+                triggerToast('Institution profile updated.', 'success');
+                reloadData();
+              }}
+            />
+          )}
+
         </main>
       </div>
 
@@ -2245,5 +2262,173 @@ function ActivityLogView() {
         ))}
       </tbody>
     </table>
+  );
+}
+
+// Institution profile editor. Admins configure the auto-filing taxonomy here:
+// the institution name, units, per-category folder names, and whether an
+// AI-extracted activity sub-level is added. Non-admins see a read-only view.
+const DOC_CATEGORIES: { key: Document['documentType']; label: string }[] = [
+  { key: 'Contract', label: 'Contracts' },
+  { key: 'Invoice', label: 'Invoices' },
+  { key: 'Memo', label: 'Memos' },
+  { key: 'Report', label: 'Reports' },
+  { key: 'Support', label: 'Support' },
+  { key: 'Other', label: 'Other' }
+];
+
+function InstitutionProfileView({
+  currentUser,
+  onSaved
+}: {
+  currentUser: User;
+  onSaved: (inst: Institution) => void;
+}) {
+  const [inst, setInst] = useState<Institution | null>(null);
+  const [unitsText, setUnitsText] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const canEdit = currentUser.role === 'Admin';
+
+  useEffect(() => {
+    fetch('/api/institution')
+      .then(res => res.json())
+      .then((d: Institution) => {
+        setInst(d);
+        setUnitsText((d.units || []).join(', '));
+      });
+  }, []);
+
+  if (!inst) {
+    return <p className="text-xs text-slate-400 p-4">Loading institution profile…</p>;
+  }
+
+  const updateCat = (cat: Document['documentType'], val: string) =>
+    setInst({ ...inst, categoryFolders: { ...inst.categoryFolders, [cat]: val } });
+
+  const save = () => {
+    setSaving(true);
+    setError('');
+    fetch('/api/institution', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: inst.name,
+        units: unitsText.split(/[,\n]/).map(s => s.trim()).filter(Boolean),
+        categoryFolders: inst.categoryFolders,
+        activityDimension: inst.activityDimension
+      })
+    })
+      .then(res => res.json())
+      .then((d) => {
+        setSaving(false);
+        if (d.error) {
+          setError(d.error);
+        } else {
+          setInst(d);
+          setUnitsText((d.units || []).join(', '));
+          onSaved(d);
+        }
+      })
+      .catch(() => {
+        setSaving(false);
+        setError('Failed to save institution profile.');
+      });
+  };
+
+  return (
+    <div className="space-y-4 max-w-3xl">
+      <div className="flex flex-col">
+        <h2 className="text-xl font-display font-extrabold text-slate-800 tracking-tight">Institution Profile</h2>
+        <p className="text-xs text-slate-400">
+          Defines how documents are automatically organized. Uploads are filed under
+          <span className="font-mono font-bold text-slate-500"> Unit / Category{inst.activityDimension === 'ai-activity' ? ' / Activity' : ''}</span>.
+          {!canEdit && ' (Read-only — Admin access required to edit.)'}
+        </p>
+      </div>
+
+      {error && (
+        <div className="bg-rose-50 border border-rose-100 text-rose-600 text-[11px] font-semibold rounded-xl p-2.5">{error}</div>
+      )}
+
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-5">
+        {/* Name */}
+        <div className="space-y-1.5">
+          <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Institution Name</label>
+          <input
+            type="text"
+            value={inst.name}
+            disabled={!canEdit}
+            onChange={(e) => setInst({ ...inst, name: e.target.value })}
+            className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none focus:ring-2 focus:ring-indigo-100 focus:bg-white disabled:opacity-60"
+          />
+        </div>
+
+        {/* Units */}
+        <div className="space-y-1.5">
+          <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Units / Departments (comma-separated)</label>
+          <textarea
+            value={unitsText}
+            disabled={!canEdit}
+            onChange={(e) => setUnitsText(e.target.value)}
+            className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none h-16 resize-none focus:ring-2 focus:ring-indigo-100 focus:bg-white disabled:opacity-60"
+          />
+        </div>
+
+        {/* Category folder names */}
+        <div className="space-y-1.5">
+          <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Category Folder Names</label>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {DOC_CATEGORIES.map(({ key, label }) => (
+              <div key={key} className="flex items-center space-x-2">
+                <span className="text-[10px] font-mono font-bold text-slate-400 w-16 shrink-0">{label}</span>
+                <input
+                  type="text"
+                  value={inst.categoryFolders[key] || ''}
+                  disabled={!canEdit}
+                  onChange={(e) => updateCat(key, e.target.value)}
+                  className="flex-1 bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none focus:ring-2 focus:ring-indigo-100 focus:bg-white disabled:opacity-60"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Activity dimension */}
+        <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-3">
+          <label className="flex items-start space-x-2.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={inst.activityDimension === 'ai-activity'}
+              disabled={!canEdit}
+              onChange={(e) => setInst({ ...inst, activityDimension: e.target.checked ? 'ai-activity' : 'none' })}
+              className="mt-0.5 accent-indigo-600 w-3.5 h-3.5"
+            />
+            <span>
+              <span className="flex items-center space-x-1 text-[11px] font-bold text-indigo-800">
+                <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Add AI-extracted activity sub-level</span>
+              </span>
+              <span className="block text-[10px] text-slate-500 mt-0.5 leading-relaxed">
+                When enabled, the AI infers a short activity/project label per document and nests it as a third folder level (e.g. <span className="font-mono">Finance / Invoices / Vendor Onboarding</span>).
+              </span>
+            </span>
+          </label>
+        </div>
+
+        {canEdit && (
+          <div className="flex justify-end">
+            <button
+              onClick={save}
+              disabled={saving}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold disabled:opacity-60 flex items-center space-x-1.5"
+            >
+              <Check className="w-3.5 h-3.5 text-white" />
+              <span>{saving ? 'Saving…' : 'Save Profile'}</span>
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

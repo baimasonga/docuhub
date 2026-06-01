@@ -19,7 +19,9 @@ import {
   ActivityLog, 
   Comment,
   ExternalShareLink,
-  DashboardStats 
+  DashboardStats,
+  Institution,
+  ActivityDimension
 } from './src/types';
 
 dotenv.config();
@@ -45,12 +47,31 @@ if (!fs.existsSync(DB_DIR)) {
 }
 
 // Initial Mock Data
+const DEFAULT_INSTITUTION_ID = 'inst-smartdocs';
+
 const DEFAULT_USERS: User[] = [
-  { id: 'admin-1', fullName: 'Sarah Jenkins', email: 'sarah.j@smartsdocs.org', role: 'Admin', department: 'IT', isActive: true },
-  { id: 'manager-1', fullName: 'David Vance', email: 'david.v@smartsdocs.org', role: 'Manager', department: 'Finance', isActive: true },
-  { id: 'staff-1', fullName: 'Mohamed Bangura', email: 'mohamedamadubangura@gmail.com', role: 'Staff', department: 'Procurement', isActive: true },
-  { id: 'viewer-1', fullName: 'Alice Cooper', email: 'alice.c@smartsdocs.org', role: 'Viewer', department: 'Marketing', isActive: true },
-  { id: 'auditor-1', fullName: 'Robert Sterling', email: 'robert.s@smartsdocs.org', role: 'Auditor', department: 'Compliance', isActive: true }
+  { id: 'admin-1', fullName: 'Sarah Jenkins', email: 'sarah.j@smartsdocs.org', role: 'Admin', department: 'IT', isActive: true, institutionId: DEFAULT_INSTITUTION_ID },
+  { id: 'manager-1', fullName: 'David Vance', email: 'david.v@smartsdocs.org', role: 'Manager', department: 'Finance', isActive: true, institutionId: DEFAULT_INSTITUTION_ID },
+  { id: 'staff-1', fullName: 'Mohamed Bangura', email: 'mohamedamadubangura@gmail.com', role: 'Staff', department: 'Procurement', isActive: true, institutionId: DEFAULT_INSTITUTION_ID },
+  { id: 'viewer-1', fullName: 'Alice Cooper', email: 'alice.c@smartsdocs.org', role: 'Viewer', department: 'Marketing', isActive: true, institutionId: DEFAULT_INSTITUTION_ID },
+  { id: 'auditor-1', fullName: 'Robert Sterling', email: 'robert.s@smartsdocs.org', role: 'Auditor', department: 'Compliance', isActive: true, institutionId: DEFAULT_INSTITUTION_ID }
+];
+
+const DEFAULT_INSTITUTIONS: Institution[] = [
+  {
+    id: DEFAULT_INSTITUTION_ID,
+    name: 'SmartDocs Organization',
+    units: ['Procurement', 'Finance', 'Administration', 'IT', 'Management', 'Compliance', 'Marketing'],
+    categoryFolders: {
+      Contract: 'Contracts',
+      Invoice: 'Invoices',
+      Memo: 'Memos & Correspondence',
+      Report: 'Reports',
+      Support: 'Support & Technical',
+      Other: 'General Documents'
+    },
+    activityDimension: 'none'
+  }
 ];
 
 const DEFAULT_FOLDERS: Folder[] = [
@@ -207,7 +228,8 @@ let db = {
   comments: DEFAULT_COMMENTS,
   approvals: DEFAULT_APPROVALS,
   permissions: DEFAULT_PERMISSIONS,
-  externalLinks: DEFAULT_EXTERNAL_LINKS
+  externalLinks: DEFAULT_EXTERNAL_LINKS,
+  institutions: DEFAULT_INSTITUTIONS as Institution[]
 };
 
 function readDb() {
@@ -300,17 +322,19 @@ function mimeForType(fileType?: string): string {
 }
 
 // ----------------------------------------------------
-// Institution profile & automatic document filing
+// Institution profiles & automatic document filing
 // ----------------------------------------------------
-// The organization profile describes how this institution organizes its
-// records. The system uses it to auto-build a folder taxonomy and file each
-// uploaded document under  <Unit / Department>  →  <Category>  , creating any
-// missing folders on demand (and reusing existing ones).
-const ORG_PROFILE = {
-  name: 'SmartDocs Organization',
-  // The unit/department dimension. Documents are first filed under their unit.
-  units: ['Procurement', 'Finance', 'Administration', 'IT', 'Management', 'Compliance', 'Marketing'],
-  // Maps a document category (documentType) to a human-friendly folder name.
+// Each institution has its own profile (units + category folder names + an
+// optional activity dimension). The system uses the uploader's institution
+// profile to auto-build a folder taxonomy and file each document under
+//   <Unit / Department>  →  <Category>  [→ <Activity>]
+// creating any missing folders on demand (and reusing existing ones).
+
+// Fallback profile used if a user has no institution or it can't be found.
+const FALLBACK_INSTITUTION: Institution = {
+  id: 'inst-fallback',
+  name: 'Organization',
+  units: [],
   categoryFolders: {
     Contract: 'Contracts',
     Invoice: 'Invoices',
@@ -318,11 +342,16 @@ const ORG_PROFILE = {
     Report: 'Reports',
     Support: 'Support & Technical',
     Other: 'General Documents'
-  } as Record<Document['documentType'], string>
+  },
+  activityDimension: 'none'
 };
 
-function categoryFolderName(category: Document['documentType']): string {
-  return ORG_PROFILE.categoryFolders[category] || ORG_PROFILE.categoryFolders.Other;
+function getInstitution(institutionId?: string): Institution {
+  return db.institutions.find(i => i.id === institutionId) || db.institutions[0] || FALLBACK_INSTITUTION;
+}
+
+function categoryFolderName(inst: Institution, category: Document['documentType']): string {
+  return inst.categoryFolders[category] || inst.categoryFolders.Other || category;
 }
 
 function slugify(s: string): string {
@@ -357,18 +386,41 @@ function ensureFolder(
   return folder;
 }
 
+// Normalize an AI-extracted activity label into a tidy folder name.
+function normalizeActivity(activity?: string): string {
+  const cleaned = (activity || '').replace(/[^a-zA-Z0-9 &/-]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return 'General Activity';
+  // Title-case, capped to a few words so folder names stay sensible.
+  return cleaned
+    .split(' ')
+    .slice(0, 4)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
 // Resolve (creating as needed) the destination folder for a document based on
-// the institution profile: Unit/Department -> Category. Returns the folder id
-// plus a human-readable path for logging / UI feedback.
+// the institution profile. Returns the folder id plus a human-readable path
+// for logging / UI feedback.
 function resolveAutoFolder(
   ownerId: string,
+  inst: Institution,
   department: string | undefined,
-  category: Document['documentType']
+  category: Document['documentType'],
+  activity?: string
 ): { folderId: string; path: string } {
   const unitName = department && department.trim() ? department.trim() : 'Unassigned Unit';
   const unitFolder = ensureFolder(unitName, null, department, ownerId);
-  const categoryName = categoryFolderName(category);
+
+  const categoryName = categoryFolderName(inst, category);
   const categoryFolder = ensureFolder(categoryName, unitFolder.id, department, ownerId);
+
+  // Optional third level: an AI-extracted activity/project label.
+  if (inst.activityDimension === 'ai-activity') {
+    const activityName = normalizeActivity(activity);
+    const activityFolder = ensureFolder(activityName, categoryFolder.id, department, ownerId);
+    return { folderId: activityFolder.id, path: `${unitName} / ${categoryName} / ${activityName}` };
+  }
+
   return { folderId: categoryFolder.id, path: `${unitName} / ${categoryName}` };
 }
 
@@ -472,13 +524,15 @@ Analyze the image content and perform these tasks:
 2. Formulate 3 to 5 highly practical metadata tags for categorizing this document (e.g., invoice, technical, agreement, board, HR, audit, compliance). Keep tags all-lowercase with no '#' symbol.
 3. Classify document type into exactly one of: 'Contract', 'Invoice', 'Memo', 'Report', 'Support', 'Other'.
 4. Write a brief 1-sentence description summarizes the document contents.
+5. Infer a short (2-4 word) business activity or project this document relates to, in Title Case (e.g., "Vendor Onboarding", "Q1 Budgeting", "Office Lease"). Use "General" if unclear.
 
 Format the output strictly as a JSON object with this shape:
 {
   "ocrText": "Extracted OCR text here...",
   "tags": ["tag1", "tag2", "tag3"],
   "documentType": "Contract" | "Invoice" | "Memo" | "Report" | "Support" | "Other",
-  "description": "Short description here..."
+  "description": "Short description here...",
+  "activity": "Short activity label"
 }`
             }
           ]
@@ -497,13 +551,15 @@ Analyze this text and perform these tasks:
 2. Provide a list of 3 to 5 tag keywords. Keep tags lowercase with no '#' sign.
 3. Classify document type into exactly one of: 'Contract', 'Invoice', 'Memo', 'Report', 'Support', 'Other'.
 4. Write a brief 1-sentence description summarizes the document contents.
+5. Infer a short (2-4 word) business activity or project this document relates to, in Title Case (e.g., "Vendor Onboarding", "Q1 Budgeting", "Office Lease"). Use "General" if unclear.
 
 Format the output strictly as JSON matching this shape:
 {
   "ocrText": "Cleaned full indexed text contents...",
   "tags": ["tag1", "tag2", "tag3"],
   "documentType": "Contract" | "Invoice" | "Memo" | "Report" | "Support" | "Other",
-  "description": "Short description here..."
+  "description": "Short description here...",
+  "activity": "Short activity label"
 }`
             }
           ]
@@ -521,7 +577,8 @@ Format the output strictly as JSON matching this shape:
               ocrText: { type: Type.STRING },
               tags: { type: Type.ARRAY, items: { type: Type.STRING } },
               documentType: { type: Type.STRING },
-              description: { type: Type.STRING }
+              description: { type: Type.STRING },
+              activity: { type: Type.STRING }
             },
             required: ['ocrText', 'tags', 'documentType', 'description']
           }
@@ -535,7 +592,8 @@ Format the output strictly as JSON matching this shape:
           ocrText: result.ocrText || 'No text extracted during scan.',
           tags: result.tags || ['analyzed'],
           documentType: result.documentType || 'Other',
-          description: result.description || 'AI analyzed upload.'
+          description: result.description || 'AI analyzed upload.',
+          activity: result.activity || 'General'
         };
       }
     } catch (err) {
@@ -551,34 +609,41 @@ Format the output strictly as JSON matching this shape:
   let detectedType: Document['documentType'] = 'Other';
   let desc = 'Standard document upload.';
   let tagsObj = ['uploaded', 'indexed'];
+  let activity = 'General';
 
   if (lowerName.includes('invoice') || lowerName.includes('bill') || lowerName.includes('payment') || testText.toLowerCase().includes('total') || testText.toLowerCase().includes('amount') || testText.toLowerCase().includes('invoice')) {
     detectedType = 'Invoice';
     desc = 'Simulated OCR recognized: Invoice transaction details matching smart templates.';
     tagsObj = ['invoice', 'finance', 'payment', 'ocr-simulated'];
+    activity = 'Billing & Payments';
   } else if (lowerName.includes('agree') || lowerName.includes('contract') || lowerName.includes('lease') || testText.toLowerCase().includes('agreement') || testText.toLowerCase().includes('terms')) {
     detectedType = 'Contract';
     desc = 'Simulated OCR recognized: Commercial legal agreement and vendor service terms.';
     tagsObj = ['contract', 'legal', 'agreement', 'ocr-simulated'];
+    activity = testText.toLowerCase().includes('lease') || lowerName.includes('lease') ? 'Leasing' : 'Vendor Agreements';
   } else if (lowerName.includes('memo') || lowerName.includes('letter') || lowerName.includes('internal')) {
     detectedType = 'Memo';
     desc = 'Simulated OCR recognized: Internal communications and organizational memo.';
     tagsObj = ['memo', 'admin', 'internal', 'ocr-simulated'];
+    activity = 'Internal Communications';
   } else if (lowerName.includes('report') || lowerName.includes('audit') || lowerName.includes('metric') || lowerName.includes('q1') || lowerName.includes('q2')) {
     detectedType = 'Report';
     desc = 'Simulated OCR recognized: Quantitative progress report and department metrics sheet.';
     tagsObj = ['report', 'analytics', 'audit', 'ocr-simulated'];
+    activity = testText.toLowerCase().includes('audit') || lowerName.includes('audit') ? 'Auditing' : 'Reporting';
   } else if (lowerName.includes('it') || lowerName.includes('sys') || lowerName.includes('tech') || lowerName.includes('api')) {
     detectedType = 'Support';
     desc = 'Simulated OCR recognized: Technical schema documentation with storage parameters.';
     tagsObj = ['tech', 'support', 'it-infra', 'ocr-simulated'];
+    activity = 'Technical Operations';
   }
 
   return {
     ocrText: `[HEURISTIC OCR ANALYSIS] Document: ${fileName}\nDetected text patterns. Indexed at ${new Date().toLocaleString()}.\nPreview snippet:\n${testText.substring(0, 250) || 'Generic asset binary stream'}\nIndex complete.`,
     tags: tagsObj,
     documentType: detectedType,
-    description: desc
+    description: desc,
+    activity
   };
 }
 
@@ -620,12 +685,79 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() });
 });
 
-// Institution profile that drives automatic document filing. The UI uses this
-// to preview the destination path and label the auto-file taxonomy.
-app.get('/api/org-profile', (req, res) => {
+// The current user's institution profile. Drives the auto-file taxonomy and
+// the destination preview in the upload modal.
+app.get('/api/institution', (req, res) => {
   const user = getUser(req);
   if (!user) return res.status(401).json({ error: 'Not authenticated.' });
-  res.json(ORG_PROFILE);
+  res.json(getInstitution(user.institutionId));
+});
+
+// List institutions. Admins see all; everyone else sees just their own.
+app.get('/api/institutions', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  if (user.role === 'Admin') return res.json(db.institutions);
+  res.json(db.institutions.filter(i => i.id === user.institutionId));
+});
+
+// Update the current user's institution profile (Admin only). Validates the
+// category map covers every document category so filing can't break.
+const DOCUMENT_CATEGORIES: Document['documentType'][] = ['Contract', 'Invoice', 'Memo', 'Report', 'Support', 'Other'];
+
+app.put('/api/institution', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  if (user.role !== 'Admin') {
+    return res.status(403).json({ error: 'Only an Admin can edit the institution profile.' });
+  }
+
+  const inst = db.institutions.find(i => i.id === user.institutionId);
+  if (!inst) return res.status(404).json({ error: 'Institution not found.' });
+
+  const { name, units, categoryFolders, activityDimension } = req.body || {};
+
+  if (name !== undefined) {
+    if (typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'Institution name must be a non-empty string.' });
+    }
+    inst.name = name.trim();
+  }
+
+  if (units !== undefined) {
+    if (!Array.isArray(units) || units.some(u => typeof u !== 'string')) {
+      return res.status(400).json({ error: 'Units must be an array of strings.' });
+    }
+    inst.units = units.map(u => u.trim()).filter(Boolean);
+  }
+
+  if (categoryFolders !== undefined) {
+    if (typeof categoryFolders !== 'object' || categoryFolders === null) {
+      return res.status(400).json({ error: 'categoryFolders must be an object.' });
+    }
+    const merged = { ...inst.categoryFolders };
+    for (const cat of DOCUMENT_CATEGORIES) {
+      const val = categoryFolders[cat];
+      if (val !== undefined) {
+        if (typeof val !== 'string' || !val.trim()) {
+          return res.status(400).json({ error: `Folder name for "${cat}" must be a non-empty string.` });
+        }
+        merged[cat] = val.trim();
+      }
+    }
+    inst.categoryFolders = merged;
+  }
+
+  if (activityDimension !== undefined) {
+    if (activityDimension !== 'none' && activityDimension !== 'ai-activity') {
+      return res.status(400).json({ error: "activityDimension must be 'none' or 'ai-activity'." });
+    }
+    inst.activityDimension = activityDimension as ActivityDimension;
+  }
+
+  writeDb();
+  addAuditLog(user.id, 'Update Institution', undefined, inst.name, `Updated institution profile "${inst.name}" (activity dimension: ${inst.activityDimension}).`);
+  res.json(inst);
 });
 
 // Get Database Info & Stats
@@ -836,14 +968,16 @@ app.post('/api/documents/upload', async (req, res) => {
       fileData
     );
 
-    // Resolve final classification, then route into a folder accordingly.
+    // Resolve final classification, then route into a folder accordingly,
+    // using the uploader's institution profile to drive the taxonomy.
     const finalCategory: Document['documentType'] = (documentType as any) || aiResult.documentType || 'Other';
     const finalDept = department || dept;
+    const institution = getInstitution(user.institutionId);
 
     let destinationFolderId: string | null;
     let filedInto: string | null = null;
     if (useAutoFile) {
-      const resolved = resolveAutoFolder(userId, finalDept, finalCategory);
+      const resolved = resolveAutoFolder(userId, institution, finalDept, finalCategory, aiResult.activity);
       destinationFolderId = resolved.folderId;
       filedInto = resolved.path;
     } else {
