@@ -19,20 +19,26 @@ import {
   ActivityLog, 
   Comment,
   ExternalShareLink,
-  DashboardStats 
+  DashboardStats,
+  Institution,
+  ActivityDimension
 } from './src/types';
 
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+// Railway (and most PaaS) inject the port to bind via the PORT env var.
+const PORT = Number(process.env.PORT) || 3000;
 
 // Body parser
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// DB File Path
-const DB_DIR = path.join(process.cwd(), 'data');
+// DB File Path. DATA_DIR lets the JSON datastore live on a mounted persistent
+// volume in production (e.g. a Railway volume at /data) so it survives deploys.
+const DB_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DB_DIR, 'db.json');
 
 // Ensure db directory and file exist
@@ -41,12 +47,31 @@ if (!fs.existsSync(DB_DIR)) {
 }
 
 // Initial Mock Data
+const DEFAULT_INSTITUTION_ID = 'inst-smartdocs';
+
 const DEFAULT_USERS: User[] = [
-  { id: 'admin-1', fullName: 'Sarah Jenkins', email: 'sarah.j@smartsdocs.org', role: 'Admin', department: 'IT', isActive: true },
-  { id: 'manager-1', fullName: 'David Vance', email: 'david.v@smartsdocs.org', role: 'Manager', department: 'Finance', isActive: true },
-  { id: 'staff-1', fullName: 'Mohamed Bangura', email: 'mohamedamadubangura@gmail.com', role: 'Staff', department: 'Procurement', isActive: true },
-  { id: 'viewer-1', fullName: 'Alice Cooper', email: 'alice.c@smartsdocs.org', role: 'Viewer', department: 'Marketing', isActive: true },
-  { id: 'auditor-1', fullName: 'Robert Sterling', email: 'robert.s@smartsdocs.org', role: 'Auditor', department: 'Compliance', isActive: true }
+  { id: 'admin-1', fullName: 'Sarah Jenkins', email: 'sarah.j@smartsdocs.org', role: 'Admin', department: 'IT', isActive: true, institutionId: DEFAULT_INSTITUTION_ID },
+  { id: 'manager-1', fullName: 'David Vance', email: 'david.v@smartsdocs.org', role: 'Manager', department: 'Finance', isActive: true, institutionId: DEFAULT_INSTITUTION_ID },
+  { id: 'staff-1', fullName: 'Mohamed Bangura', email: 'mohamedamadubangura@gmail.com', role: 'Staff', department: 'Procurement', isActive: true, institutionId: DEFAULT_INSTITUTION_ID },
+  { id: 'viewer-1', fullName: 'Alice Cooper', email: 'alice.c@smartsdocs.org', role: 'Viewer', department: 'Marketing', isActive: true, institutionId: DEFAULT_INSTITUTION_ID },
+  { id: 'auditor-1', fullName: 'Robert Sterling', email: 'robert.s@smartsdocs.org', role: 'Auditor', department: 'Compliance', isActive: true, institutionId: DEFAULT_INSTITUTION_ID }
+];
+
+const DEFAULT_INSTITUTIONS: Institution[] = [
+  {
+    id: DEFAULT_INSTITUTION_ID,
+    name: 'SmartDocs Organization',
+    units: ['Procurement', 'Finance', 'Administration', 'IT', 'Management', 'Compliance', 'Marketing'],
+    categoryFolders: {
+      Contract: 'Contracts',
+      Invoice: 'Invoices',
+      Memo: 'Memos & Correspondence',
+      Report: 'Reports',
+      Support: 'Support & Technical',
+      Other: 'General Documents'
+    },
+    activityDimension: 'none'
+  }
 ];
 
 const DEFAULT_FOLDERS: Folder[] = [
@@ -203,7 +228,8 @@ let db = {
   comments: DEFAULT_COMMENTS,
   approvals: DEFAULT_APPROVALS,
   permissions: DEFAULT_PERMISSIONS,
-  externalLinks: DEFAULT_EXTERNAL_LINKS
+  externalLinks: DEFAULT_EXTERNAL_LINKS,
+  institutions: DEFAULT_INSTITUTIONS as Institution[]
 };
 
 function readDb() {
@@ -215,11 +241,36 @@ function readDb() {
   } catch (err) {
     console.error('Error reading db file, falling back to in-memory seed.', err);
   }
+  migrateDb();
+}
+
+// Backfill data persisted before newer fields existed (e.g. a Railway volume or
+// local data dir from an earlier version), so upgrades stay functional.
+function migrateDb() {
+  let changed = false;
+  // Ensure at least one institution exists.
+  if (!Array.isArray(db.institutions) || db.institutions.length === 0) {
+    db.institutions = DEFAULT_INSTITUTIONS;
+    changed = true;
+  }
+  const fallbackInstitutionId = db.institutions[0].id;
+  // Legacy users may predate institutionId; assign them to the default.
+  for (const user of db.users) {
+    if (!user.institutionId) {
+      user.institutionId = fallbackInstitutionId;
+      changed = true;
+    }
+  }
+  if (changed) writeDb();
 }
 
 function writeDb() {
   try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf8');
+    // Write to a temp file then atomically rename so a crash mid-write cannot
+    // leave a truncated/corrupt db.json behind.
+    const tmp = `${DB_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(db, null, 2), 'utf8');
+    fs.renameSync(tmp, DB_FILE);
   } catch (err) {
     console.error('Error saving database.', err);
   }
@@ -227,6 +278,201 @@ function writeDb() {
 
 // Load seed on start
 readDb();
+
+// ----------------------------------------------------
+// Session-based identity (replaces spoofable x-user-* headers)
+// ----------------------------------------------------
+// A profile switch mints a server-side session id stored in an HttpOnly
+// cookie. Identity is resolved from the session, so a client can no longer
+// impersonate another user/role by setting request headers.
+const sessions: Record<string, string> = {}; // sessionId -> userId
+
+function genToken(prefix = 's'): string {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+}
+
+function parseCookies(req: express.Request): Record<string, string> {
+  const header = req.headers.cookie;
+  if (!header) return {};
+  return header.split(';').reduce((acc, part) => {
+    const idx = part.indexOf('=');
+    if (idx > -1) {
+      acc[part.slice(0, idx).trim()] = decodeURIComponent(part.slice(idx + 1).trim());
+    }
+    return acc;
+  }, {} as Record<string, string>);
+}
+
+function getUser(req: express.Request): User | null {
+  const sid = parseCookies(req)['sid'];
+  if (sid && sessions[sid]) {
+    return db.users.find(u => u.id === sessions[sid]) || null;
+  }
+  return null;
+}
+
+// ----------------------------------------------------
+// Authorization helpers
+// ----------------------------------------------------
+function canViewDocument(user: Pick<User, 'id' | 'role' | 'department'>, doc: Document): boolean {
+  // Admin/Manager/Auditor have organization-wide visibility.
+  if (user.role === 'Admin' || user.role === 'Manager' || user.role === 'Auditor') return true;
+  if (doc.ownerId === user.id) return true;
+  const shared = db.permissions.some(p => p.documentId === doc.id && p.sharedWithUserId === user.id);
+  if (user.role === 'Staff') return shared || doc.department === user.department;
+  if (user.role === 'Viewer') return shared || (doc.department === user.department && doc.status === 'Approved');
+  return false;
+}
+
+function canEditDocument(user: Pick<User, 'id' | 'role'>, doc: Document): boolean {
+  if (user.role === 'Admin' || user.role === 'Manager') return true;
+  if (doc.ownerId === user.id) return true;
+  return db.permissions.some(
+    p => p.documentId === doc.id && p.sharedWithUserId === user.id && p.permissionType === 'Editor'
+  );
+}
+
+// Map a stored fileType to a sensible MIME type for downloads / inline serving.
+function mimeForType(fileType?: string): string {
+  const t = (fileType || '').toLowerCase();
+  if (t.includes('png')) return 'image/png';
+  if (t.includes('jpg') || t.includes('jpeg')) return 'image/jpeg';
+  if (t.includes('gif')) return 'image/gif';
+  if (t.includes('pdf')) return 'application/pdf';
+  return 'text/plain';
+}
+
+// ----------------------------------------------------
+// Institution profiles & automatic document filing
+// ----------------------------------------------------
+// Each institution has its own profile (units + category folder names + an
+// optional activity dimension). The system uses the uploader's institution
+// profile to auto-build a folder taxonomy and file each document under
+//   <Unit / Department>  →  <Category>  [→ <Activity>]
+// creating any missing folders on demand (and reusing existing ones).
+
+// Fallback profile used if a user has no institution or it can't be found.
+const FALLBACK_INSTITUTION: Institution = {
+  id: 'inst-fallback',
+  name: 'Organization',
+  units: [],
+  categoryFolders: {
+    Contract: 'Contracts',
+    Invoice: 'Invoices',
+    Memo: 'Memos & Correspondence',
+    Report: 'Reports',
+    Support: 'Support & Technical',
+    Other: 'General Documents'
+  },
+  activityDimension: 'none'
+};
+
+function getInstitution(institutionId?: string): Institution {
+  return db.institutions.find(i => i.id === institutionId) || db.institutions[0] || FALLBACK_INSTITUTION;
+}
+
+function categoryFolderName(inst: Institution, category: Document['documentType']): string {
+  return inst.categoryFolders[category] || inst.categoryFolders.Other || category;
+}
+
+function slugify(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'item';
+}
+
+// Find-or-create a folder by name under a given parent (within a department
+// scope). Reuses an existing match so we don't duplicate the seed taxonomy.
+function ensureFolder(
+  name: string,
+  parentFolderId: string | null,
+  department: string | undefined,
+  ownerId: string
+): Folder {
+  const existing = db.folders.find(
+    f =>
+      f.parentFolderId === parentFolderId &&
+      f.name.toLowerCase() === name.toLowerCase() &&
+      (department ? (f.department || undefined) === department : true)
+  );
+  if (existing) return existing;
+
+  const folder: Folder = {
+    id: `auto-${slugify(name)}-${slugify(parentFolderId || 'root')}-${Date.now().toString(36)}${Math.floor(Math.random() * 1000)}`,
+    name,
+    parentFolderId,
+    ownerId,
+    department,
+    createdAt: new Date().toISOString()
+  };
+  db.folders.push(folder);
+  return folder;
+}
+
+// Normalize an AI-extracted activity label into a tidy folder name.
+function normalizeActivity(activity?: string): string {
+  const cleaned = (activity || '').replace(/[^a-zA-Z0-9 &/-]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return 'General Activity';
+  // Title-case, capped to a few words so folder names stay sensible.
+  return cleaned
+    .split(' ')
+    .slice(0, 4)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
+// Resolve (creating as needed) the destination folder for a document based on
+// the institution profile. Returns the folder id plus a human-readable path
+// for logging / UI feedback.
+function resolveAutoFolder(
+  ownerId: string,
+  inst: Institution,
+  department: string | undefined,
+  category: Document['documentType'],
+  activity?: string
+): { folderId: string; path: string } {
+  const unitName = department && department.trim() ? department.trim() : 'Unassigned Unit';
+  const unitFolder = ensureFolder(unitName, null, department, ownerId);
+
+  const categoryName = categoryFolderName(inst, category);
+  const categoryFolder = ensureFolder(categoryName, unitFolder.id, department, ownerId);
+
+  // Optional third level: an AI-extracted activity/project label.
+  if (inst.activityDimension === 'ai-activity') {
+    const activityName = normalizeActivity(activity);
+    const activityFolder = ensureFolder(activityName, categoryFolder.id, department, ownerId);
+    return { folderId: activityFolder.id, path: `${unitName} / ${categoryName} / ${activityName}` };
+  }
+
+  return { folderId: categoryFolder.id, path: `${unitName} / ${categoryName}` };
+}
+
+// Heuristic: stored file payloads are base64 for uploads but raw text for the
+// seed data. Decide which so we can serve real bytes either way.
+function looksLikeBase64(s: string): boolean {
+  const compact = s.replace(/\s/g, '');
+  return compact.length > 0 && compact.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(compact);
+}
+
+function storedFileToBuffer(fileData: string): Buffer {
+  return looksLikeBase64(fileData) ? Buffer.from(fileData, 'base64') : Buffer.from(fileData, 'utf8');
+}
+
+// Best-effort decode of a base64 payload back to readable text. The client
+// base64-encodes everything before upload, so text documents arrive encoded;
+// analysing them requires decoding first. Returns the original string if it
+// does not round-trip cleanly as base64.
+function decodeMaybeBase64(input: string): string {
+  if (!input) return '';
+  try {
+    const decoded = Buffer.from(input, 'base64').toString('utf8');
+    const reencoded = Buffer.from(decoded, 'utf8').toString('base64').replace(/=+$/, '');
+    if (reencoded === input.replace(/\s+/g, '').replace(/=+$/, '')) {
+      return decoded;
+    }
+  } catch {
+    /* fall through */
+  }
+  return input;
+}
 
 // Lazy Gemini API Client
 let aiClient: GoogleGenAI | null = null;
@@ -273,13 +519,16 @@ function addAuditLog(userId: string, action: string, docId?: string, docTitle?: 
 async function runAiOcrAndTagging(fileName: string, mimeType: string, fileDataB64OrText: string) {
   const ai = getGeminiClient();
   const lowerName = fileName.toLowerCase();
-  
+  const isImage = mimeType.startsWith('image/');
+  // Text files arrive base64-encoded from the client; decode before analysing.
+  const decodedText = isImage ? '' : decodeMaybeBase64(fileDataB64OrText);
+
   if (ai) {
     try {
       console.log(`Running smart Gemini OCR & Automated Tagging for: ${fileName}`);
-      
+
       let contents: any;
-      if (mimeType.startsWith('image/')) {
+      if (isImage) {
         contents = {
           parts: [
             {
@@ -296,13 +545,15 @@ Analyze the image content and perform these tasks:
 2. Formulate 3 to 5 highly practical metadata tags for categorizing this document (e.g., invoice, technical, agreement, board, HR, audit, compliance). Keep tags all-lowercase with no '#' symbol.
 3. Classify document type into exactly one of: 'Contract', 'Invoice', 'Memo', 'Report', 'Support', 'Other'.
 4. Write a brief 1-sentence description summarizes the document contents.
+5. Infer a short (2-4 word) business activity or project this document relates to, in Title Case (e.g., "Vendor Onboarding", "Q1 Budgeting", "Office Lease"). Use "General" if unclear.
 
 Format the output strictly as a JSON object with this shape:
 {
   "ocrText": "Extracted OCR text here...",
   "tags": ["tag1", "tag2", "tag3"],
   "documentType": "Contract" | "Invoice" | "Memo" | "Report" | "Support" | "Other",
-  "description": "Short description here..."
+  "description": "Short description here...",
+  "activity": "Short activity label"
 }`
             }
           ]
@@ -314,20 +565,22 @@ Format the output strictly as a JSON object with this shape:
             {
               text: `You are an integrated AI engine inside DocuHub. This file is titled "${fileName}".
 Here is its core raw text/data:
-"${fileDataB64OrText}"
+"${decodedText}"
 
 Analyze this text and perform these tasks:
 1. Summarize and index this content cleanly for our full-text database indexer.
 2. Provide a list of 3 to 5 tag keywords. Keep tags lowercase with no '#' sign.
 3. Classify document type into exactly one of: 'Contract', 'Invoice', 'Memo', 'Report', 'Support', 'Other'.
 4. Write a brief 1-sentence description summarizes the document contents.
+5. Infer a short (2-4 word) business activity or project this document relates to, in Title Case (e.g., "Vendor Onboarding", "Q1 Budgeting", "Office Lease"). Use "General" if unclear.
 
 Format the output strictly as JSON matching this shape:
 {
   "ocrText": "Cleaned full indexed text contents...",
   "tags": ["tag1", "tag2", "tag3"],
   "documentType": "Contract" | "Invoice" | "Memo" | "Report" | "Support" | "Other",
-  "description": "Short description here..."
+  "description": "Short description here...",
+  "activity": "Short activity label"
 }`
             }
           ]
@@ -335,7 +588,7 @@ Format the output strictly as JSON matching this shape:
       }
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3.5-flash',
+        model: 'gemini-2.5-flash',
         contents,
         config: {
           responseMimeType: 'application/json',
@@ -345,7 +598,8 @@ Format the output strictly as JSON matching this shape:
               ocrText: { type: Type.STRING },
               tags: { type: Type.ARRAY, items: { type: Type.STRING } },
               documentType: { type: Type.STRING },
-              description: { type: Type.STRING }
+              description: { type: Type.STRING },
+              activity: { type: Type.STRING }
             },
             required: ['ocrText', 'tags', 'documentType', 'description']
           }
@@ -359,7 +613,8 @@ Format the output strictly as JSON matching this shape:
           ocrText: result.ocrText || 'No text extracted during scan.',
           tags: result.tags || ['analyzed'],
           documentType: result.documentType || 'Other',
-          description: result.description || 'AI analyzed upload.'
+          description: result.description || 'AI analyzed upload.',
+          activity: result.activity || 'General'
         };
       }
     } catch (err) {
@@ -367,41 +622,49 @@ Format the output strictly as JSON matching this shape:
     }
   }
 
-  // Local premium simulated indexer and tagging engine
-  console.log('Using simulated intelligence indexer.');
-  const testText = fileDataB64OrText.substring(0, 1000);
+  // Local heuristic indexer and tagging engine (used when no API key is set
+  // or the API call fails). Operates on decoded text, not the raw base64.
+  console.log('Using local heuristic indexer.');
+  const testText = (isImage ? '' : decodedText).substring(0, 1000);
   
   let detectedType: Document['documentType'] = 'Other';
   let desc = 'Standard document upload.';
   let tagsObj = ['uploaded', 'indexed'];
+  let activity = 'General';
 
   if (lowerName.includes('invoice') || lowerName.includes('bill') || lowerName.includes('payment') || testText.toLowerCase().includes('total') || testText.toLowerCase().includes('amount') || testText.toLowerCase().includes('invoice')) {
     detectedType = 'Invoice';
     desc = 'Simulated OCR recognized: Invoice transaction details matching smart templates.';
     tagsObj = ['invoice', 'finance', 'payment', 'ocr-simulated'];
+    activity = 'Billing & Payments';
   } else if (lowerName.includes('agree') || lowerName.includes('contract') || lowerName.includes('lease') || testText.toLowerCase().includes('agreement') || testText.toLowerCase().includes('terms')) {
     detectedType = 'Contract';
     desc = 'Simulated OCR recognized: Commercial legal agreement and vendor service terms.';
     tagsObj = ['contract', 'legal', 'agreement', 'ocr-simulated'];
+    activity = testText.toLowerCase().includes('lease') || lowerName.includes('lease') ? 'Leasing' : 'Vendor Agreements';
   } else if (lowerName.includes('memo') || lowerName.includes('letter') || lowerName.includes('internal')) {
     detectedType = 'Memo';
     desc = 'Simulated OCR recognized: Internal communications and organizational memo.';
     tagsObj = ['memo', 'admin', 'internal', 'ocr-simulated'];
+    activity = 'Internal Communications';
   } else if (lowerName.includes('report') || lowerName.includes('audit') || lowerName.includes('metric') || lowerName.includes('q1') || lowerName.includes('q2')) {
     detectedType = 'Report';
     desc = 'Simulated OCR recognized: Quantitative progress report and department metrics sheet.';
     tagsObj = ['report', 'analytics', 'audit', 'ocr-simulated'];
+    activity = testText.toLowerCase().includes('audit') || lowerName.includes('audit') ? 'Auditing' : 'Reporting';
   } else if (lowerName.includes('it') || lowerName.includes('sys') || lowerName.includes('tech') || lowerName.includes('api')) {
     detectedType = 'Support';
     desc = 'Simulated OCR recognized: Technical schema documentation with storage parameters.';
     tagsObj = ['tech', 'support', 'it-infra', 'ocr-simulated'];
+    activity = 'Technical Operations';
   }
 
   return {
     ocrText: `[HEURISTIC OCR ANALYSIS] Document: ${fileName}\nDetected text patterns. Indexed at ${new Date().toLocaleString()}.\nPreview snippet:\n${testText.substring(0, 250) || 'Generic asset binary stream'}\nIndex complete.`,
     tags: tagsObj,
     documentType: detectedType,
-    description: desc
+    description: desc,
+    activity
   };
 }
 
@@ -414,43 +677,120 @@ app.get('/api/users', (req, res) => {
   res.json(db.users);
 });
 
-// Update default test user details or active profile configs
+// Switch the active demo profile. This mints a server-side session and sets
+// an HttpOnly cookie; all subsequent identity is resolved from that session.
 app.post('/api/users/switch-profile', (req, res) => {
   const { userId } = req.body;
   const user = db.users.find(u => u.id === userId);
   if (!user) {
     return res.status(404).json({ error: 'User does not exist.' });
   }
+
+  const sid = genToken('sess');
+  sessions[sid] = user.id;
+  res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; Path=/; SameSite=Lax; Max-Age=86400`);
+
   // Audit switched
   addAuditLog(userId, 'Login', undefined, undefined, `User switched profile to ${user.fullName} (${user.role}).`);
   res.json({ success: true, user });
 });
 
+// Return the currently authenticated profile (or null) for session bootstrap.
+app.get('/api/session', (req, res) => {
+  const user = getUser(req);
+  res.json({ user: user || null });
+});
+
+// Lightweight health check for the platform's uptime probe.
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() });
+});
+
+// The current user's institution profile. Drives the auto-file taxonomy and
+// the destination preview in the upload modal.
+app.get('/api/institution', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  res.json(getInstitution(user.institutionId));
+});
+
+// List institutions. Admins see all; everyone else sees just their own.
+app.get('/api/institutions', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  if (user.role === 'Admin') return res.json(db.institutions);
+  res.json(db.institutions.filter(i => i.id === user.institutionId));
+});
+
+// Update the current user's institution profile (Admin only). Validates the
+// category map covers every document category so filing can't break.
+const DOCUMENT_CATEGORIES: Document['documentType'][] = ['Contract', 'Invoice', 'Memo', 'Report', 'Support', 'Other'];
+
+app.put('/api/institution', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  if (user.role !== 'Admin') {
+    return res.status(403).json({ error: 'Only an Admin can edit the institution profile.' });
+  }
+
+  // Fall back to the first institution if the user's id is missing/stale, so a
+  // legacy (pre-migration) admin can still edit a real, persisted profile.
+  const inst = db.institutions.find(i => i.id === user.institutionId) || db.institutions[0];
+  if (!inst) return res.status(404).json({ error: 'Institution not found.' });
+
+  const { name, units, categoryFolders, activityDimension } = req.body || {};
+
+  if (name !== undefined) {
+    if (typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'Institution name must be a non-empty string.' });
+    }
+    inst.name = name.trim();
+  }
+
+  if (units !== undefined) {
+    if (!Array.isArray(units) || units.some(u => typeof u !== 'string')) {
+      return res.status(400).json({ error: 'Units must be an array of strings.' });
+    }
+    inst.units = units.map(u => u.trim()).filter(Boolean);
+  }
+
+  if (categoryFolders !== undefined) {
+    if (typeof categoryFolders !== 'object' || categoryFolders === null) {
+      return res.status(400).json({ error: 'categoryFolders must be an object.' });
+    }
+    const merged = { ...inst.categoryFolders };
+    for (const cat of DOCUMENT_CATEGORIES) {
+      const val = categoryFolders[cat];
+      if (val !== undefined) {
+        if (typeof val !== 'string' || !val.trim()) {
+          return res.status(400).json({ error: `Folder name for "${cat}" must be a non-empty string.` });
+        }
+        merged[cat] = val.trim();
+      }
+    }
+    inst.categoryFolders = merged;
+  }
+
+  if (activityDimension !== undefined) {
+    if (activityDimension !== 'none' && activityDimension !== 'ai-activity') {
+      return res.status(400).json({ error: "activityDimension must be 'none' or 'ai-activity'." });
+    }
+    inst.activityDimension = activityDimension as ActivityDimension;
+  }
+
+  writeDb();
+  addAuditLog(user.id, 'Update Institution', undefined, inst.name, `Updated institution profile "${inst.name}" (activity dimension: ${inst.activityDimension}).`);
+  res.json(inst);
+});
+
 // Get Database Info & Stats
 app.get('/api/stats', (req, res) => {
-  const userId = req.headers['x-user-id'] as string || 'staff-1';
-  const role = req.headers['x-user-role'] as string || 'Staff';
-  const dept = req.headers['x-user-department'] as string || 'Procurement';
-  
-  // Calculate counts based on access permission
-  let visibleDocs = db.documents.filter(d => !d.isDeleted);
-  
-  if (role === 'Staff') {
-    // Staff see owned docs, shared docs, or department docs
-    visibleDocs = db.documents.filter(d => 
-      !d.isDeleted && 
-      (d.ownerId === userId || 
-       d.department === dept || 
-       db.permissions.some(p => p.documentId === d.id && p.sharedWithUserId === userId))
-    );
-  } else if (role === 'Viewer') {
-    // Viewers only see elements directly shared, or in their department that are approved
-    visibleDocs = db.documents.filter(d => 
-      !d.isDeleted && 
-      (d.department === dept || db.permissions.some(p => p.documentId === d.id && p.sharedWithUserId === userId)) &&
-      (d.status === 'Approved' || d.ownerId === userId)
-    );
-  }
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated. Please select a profile.' });
+  const userId = user.id;
+
+  // Counts are scoped to the documents this user is allowed to see.
+  const visibleDocs = db.documents.filter(d => !d.isDeleted && canViewDocument(user, d));
 
   const approved = visibleDocs.filter(d => d.status === 'Approved').length;
   
@@ -486,7 +826,9 @@ app.get('/api/folders', (req, res) => {
 
 // Create Folder
 app.post('/api/folders', (req, res) => {
-  const userId = req.headers['x-user-id'] as string || 'staff-1';
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const userId = user.id;
   const { name, parentFolderId, department } = req.body;
   
   if (!name || name.trim() === '') {
@@ -511,41 +853,30 @@ app.post('/api/folders', (req, res) => {
 
 // Documents search and lists
 app.get('/api/documents', (req, res) => {
-  const userId = req.headers['x-user-id'] as string || 'staff-1';
-  const role = req.headers['x-user-role'] as string || 'Staff';
-  const dept = req.headers['x-user-department'] as string || 'Procurement';
-  
-  const { folderId, status, category, archive, query, starred, filterType } = req.query;
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated. Please select a profile.' });
+  const userId = user.id;
 
-  // Let's filter base visibility
-  let docs = db.documents;
+  const { folderId, status, category, query, starred, filterType } = req.query;
 
-  // Role permissions filtering
-  // Admin, Manager, Auditor see everything by default (Auditor tracks overall)
-  // Staff see owned docs, shared docs, or department docs
-  // Viewer see department-only approved docs or explicitly shared docs
-  if (role === 'Staff') {
-    docs = docs.filter(d => 
-      d.ownerId === userId || 
-      d.department === dept || 
-      db.permissions.some(p => p.documentId === d.id && p.sharedWithUserId === userId)
-    );
-  } else if (role === 'Viewer') {
-    docs = docs.filter(d => 
-      d.ownerId === userId ||
-      ((d.department === dept || db.permissions.some(p => p.documentId === d.id && p.sharedWithUserId === userId)) && d.status === 'Approved')
-    );
-  }
+  // Base visibility is enforced centrally via canViewDocument so the list
+  // matches the per-document access rules.
+  let docs = db.documents.filter(d => canViewDocument(user, d));
 
   // Filter out Trash vs Standard Active docs
   if (filterType === 'trash') {
     docs = docs.filter(d => d.isDeleted);
   } else {
     docs = docs.filter(d => !d.isDeleted);
-    
-    // Archive filtering
+
     if (filterType === 'archive') {
-      docs = docs.filter(d => d.isArchived || d.confidentialityLevel === 'Archive');
+      docs = docs.filter(d => d.isArchived);
+    } else if (filterType === 'shared') {
+      // "Shared with me": documents explicitly shared with the user by someone else.
+      docs = docs.filter(d =>
+        !d.isArchived &&
+        db.permissions.some(p => p.documentId === d.id && p.sharedWithUserId === userId && p.sharedById !== userId)
+      );
     } else {
       docs = docs.filter(d => !d.isArchived);
     }
@@ -593,9 +924,15 @@ app.get('/api/documents', (req, res) => {
 
 // Single Document Detail
 app.get('/api/documents/:id', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+
   const doc = db.documents.find(d => d.id === req.params.id);
   if (!doc) {
     return res.status(404).json({ error: 'Document not found.' });
+  }
+  if (!canViewDocument(user, doc)) {
+    return res.status(403).json({ error: 'You do not have access to this document.' });
   }
 
   // Fetch version history
@@ -631,25 +968,44 @@ app.get('/api/documents/:id', (req, res) => {
 
 // Upload File (with OCR & Tagging base64 payload)
 app.post('/api/documents/upload', async (req, res) => {
-  const userId = req.headers['x-user-id'] as string || 'staff-1';
-  const role = req.headers['x-user-role'] as string || 'Staff';
-  const dept = req.headers['x-user-department'] as string || 'Procurement';
-  
-  const { title, description, folderId, documentType, fileName, fileSize, fileType, fileData, department } = req.body;
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated. Please select a profile.' });
+  const userId = user.id;
+  const dept = user.department;
+
+  const { title, description, folderId, documentType, fileName, fileSize, fileType, fileData, department, autoFile } = req.body;
 
   if (!title || !fileName || !fileData) {
     return res.status(400).json({ error: 'Title, file name, and file data stream are required.' });
   }
 
-  const u = db.users.find(usr => usr.id === userId) || { fullName: 'Mohamed Bangura', department: 'Procurement' };
+  // Auto-filing is on by default: the system routes the document into its
+  // Unit/Category folder. Pass autoFile === false to use an explicit folderId.
+  const useAutoFile = autoFile !== false;
 
   try {
     // 1. Run OCR and tags extraction
     const aiResult = await runAiOcrAndTagging(
-      fileName, 
-      fileType || 'text/plain', 
+      fileName,
+      fileType || 'text/plain',
       fileData
     );
+
+    // Resolve final classification, then route into a folder accordingly,
+    // using the uploader's institution profile to drive the taxonomy.
+    const finalCategory: Document['documentType'] = (documentType as any) || aiResult.documentType || 'Other';
+    const finalDept = department || dept;
+    const institution = getInstitution(user.institutionId);
+
+    let destinationFolderId: string | null;
+    let filedInto: string | null = null;
+    if (useAutoFile) {
+      const resolved = resolveAutoFolder(userId, institution, finalDept, finalCategory, aiResult.activity);
+      destinationFolderId = resolved.folderId;
+      filedInto = resolved.path;
+    } else {
+      destinationFolderId = folderId || null;
+    }
 
     // 2. Insert Document
     const docId = `doc-${Date.now()}`;
@@ -658,10 +1014,10 @@ app.post('/api/documents/upload', async (req, res) => {
       title,
       description: description || aiResult.description,
       ownerId: userId,
-      ownerName: u.fullName,
-      department: department || u.department || dept,
-      folderId: folderId || null,
-      documentType: (documentType as any) || aiResult.documentType || 'Other',
+      ownerName: user.fullName,
+      department: finalDept,
+      folderId: destinationFolderId,
+      documentType: finalCategory,
       status: 'Draft', // initial state is draft
       confidentialityLevel: 'Normal File',
       currentVersion: 'v1',
@@ -684,8 +1040,8 @@ app.post('/api/documents/upload', async (req, res) => {
       fileType: fileType || 'txt',
       versionNumber: 'v1',
       uploadedBy: userId,
-      uploadedByName: u.fullName,
-      fileData, // base64 payload stored securely in our simulated cloud DB
+      uploadedByName: user.fullName,
+      fileData, // base64 payload stored in the JSON datastore
       createdAt: new Date().toISOString()
     };
 
@@ -693,12 +1049,16 @@ app.post('/api/documents/upload', async (req, res) => {
     db.versions.push(newVersion);
     writeDb();
 
-    addAuditLog(userId, 'Upload', docId, title, `Uploaded first version "${fileName}" representing "${title}". AI-OCR detected type: ${newDoc.documentType}`);
+    const filingNote = filedInto
+      ? ` Auto-filed into "${filedInto}".`
+      : '';
+    addAuditLog(userId, 'Upload', docId, title, `Uploaded first version "${fileName}" representing "${title}". AI-OCR detected type: ${newDoc.documentType}.${filingNote}`);
 
     res.status(201).json({
       success: true,
       document: newDoc,
-      version: newVersion
+      version: newVersion,
+      filedInto
     });
 
   } catch (err: any) {
@@ -709,7 +1069,9 @@ app.post('/api/documents/upload', async (req, res) => {
 
 // Upload New Version of Existing File
 app.post('/api/documents/:id/version', async (req, res) => {
-  const userId = req.headers['x-user-id'] as string || 'staff-1';
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const userId = user.id;
   const { fileName, fileSize, fileType, fileData } = req.body;
   const docId = req.params.id;
 
@@ -717,12 +1079,13 @@ app.post('/api/documents/:id/version', async (req, res) => {
   if (!doc) {
     return res.status(404).json({ error: 'Document not found.' });
   }
+  if (!canEditDocument(user, doc)) {
+    return res.status(403).json({ error: 'You do not have permission to add versions to this document.' });
+  }
 
   if (!fileName || !fileData) {
     return res.status(400).json({ error: 'File name and data are required.' });
   }
-
-  const user = db.users.find(usr => usr.id === userId) || { fullName: 'Mohamed Bangura' };
 
   try {
     // Read numeric part of current version (e.g. "v2" -> 2)
@@ -766,10 +1129,15 @@ app.post('/api/documents/:id/version', async (req, res) => {
 
 // Star/Unstar a Document
 app.post('/api/documents/:id/star', (req, res) => {
-  const userId = req.headers['x-user-id'] as string || 'staff-1';
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const userId = user.id;
   const doc = db.documents.find(d => d.id === req.params.id);
   if (!doc) {
     return res.status(404).json({ error: 'Document not found.' });
+  }
+  if (!canViewDocument(user, doc)) {
+    return res.status(403).json({ error: 'You do not have access to this document.' });
   }
 
   doc.isStarred = !doc.isStarred;
@@ -782,10 +1150,15 @@ app.post('/api/documents/:id/star', (req, res) => {
 
 // Move Document to Trash (Soft Delete)
 app.post('/api/documents/:id/delete', (req, res) => {
-  const userId = req.headers['x-user-id'] as string || 'staff-1';
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const userId = user.id;
   const doc = db.documents.find(d => d.id === req.params.id);
   if (!doc) {
     return res.status(404).json({ error: 'Document not found.' });
+  }
+  if (!canEditDocument(user, doc)) {
+    return res.status(403).json({ error: 'You do not have permission to delete this document.' });
   }
 
   doc.isDeleted = true;
@@ -797,10 +1170,15 @@ app.post('/api/documents/:id/delete', (req, res) => {
 
 // Restore from Trash
 app.post('/api/documents/:id/restore', (req, res) => {
-  const userId = req.headers['x-user-id'] as string || 'staff-1';
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const userId = user.id;
   const doc = db.documents.find(d => d.id === req.params.id);
   if (!doc) {
     return res.status(404).json({ error: 'Document not found.' });
+  }
+  if (!canEditDocument(user, doc)) {
+    return res.status(403).json({ error: 'You do not have permission to restore this document.' });
   }
 
   doc.isDeleted = false;
@@ -812,10 +1190,15 @@ app.post('/api/documents/:id/restore', (req, res) => {
 
 // Permanently Delete Document
 app.post('/api/documents/:id/permanently-delete', (req, res) => {
-  const userId = req.headers['x-user-id'] as string || 'staff-1';
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const userId = user.id;
   const index = db.documents.findIndex(d => d.id === req.params.id);
   if (index === -1) {
     return res.status(404).json({ error: 'Document not found.' });
+  }
+  if (!canEditDocument(user, db.documents[index])) {
+    return res.status(403).json({ error: 'You do not have permission to purge this document.' });
   }
 
   const title = db.documents[index].title;
@@ -835,18 +1218,21 @@ app.post('/api/documents/:id/permanently-delete', (req, res) => {
 
 // Archive Document
 app.post('/api/documents/:id/archive', (req, res) => {
-  const userId = req.headers['x-user-id'] as string || 'staff-1';
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const userId = user.id;
   const doc = db.documents.find(d => d.id === req.params.id);
   if (!doc) {
     return res.status(404).json({ error: 'Document not found.' });
   }
-
-  doc.isArchived = !doc.isArchived;
-  if (doc.isArchived) {
-    doc.confidentialityLevel = 'Archive';
-  } else {
-    doc.confidentialityLevel = 'Normal File';
+  if (!canEditDocument(user, doc)) {
+    return res.status(403).json({ error: 'You do not have permission to archive this document.' });
   }
+
+  // Archive state is tracked independently of confidentiality classification
+  // so that e.g. an "Official Record" keeps its classification after archiving.
+  doc.isArchived = !doc.isArchived;
+  doc.updatedAt = new Date().toISOString();
   writeDb();
 
   const detailsStr = doc.isArchived ? 'Moved document and marked as official Archived file.' : 'Restored document from Archive database.';
@@ -856,7 +1242,9 @@ app.post('/api/documents/:id/archive', (req, res) => {
 
 // Rename Document
 app.post('/api/documents/:id/rename', (req, res) => {
-  const userId = req.headers['x-user-id'] as string || 'staff-1';
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const userId = user.id;
   const { title } = req.body;
   
   if (!title || title.trim() === '') {
@@ -866,6 +1254,9 @@ app.post('/api/documents/:id/rename', (req, res) => {
   const doc = db.documents.find(d => d.id === req.params.id);
   if (!doc) {
     return res.status(404).json({ error: 'Document not found.' });
+  }
+  if (!canEditDocument(user, doc)) {
+    return res.status(403).json({ error: 'You do not have permission to rename this document.' });
   }
 
   const oldTitle = doc.title;
@@ -879,12 +1270,17 @@ app.post('/api/documents/:id/rename', (req, res) => {
 
 // Move Document folder location
 app.post('/api/documents/:id/move', (req, res) => {
-  const userId = req.headers['x-user-id'] as string || 'staff-1';
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const userId = user.id;
   const { folderId } = req.body;
 
   const doc = db.documents.find(d => d.id === req.params.id);
   if (!doc) {
     return res.status(404).json({ error: 'Document not found.' });
+  }
+  if (!canEditDocument(user, doc)) {
+    return res.status(403).json({ error: 'You do not have permission to move this document.' });
   }
 
   doc.folderId = folderId || null;
@@ -907,7 +1303,9 @@ app.post('/api/documents/:id/move', (req, res) => {
 
 // Request Approval
 app.post('/api/documents/:id/request-approval', (req, res) => {
-  const userId = req.headers['x-user-id'] as string || 'staff-1';
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const userId = user.id;
   const { approverId, comment } = req.body;
   const docId = req.params.id;
 
@@ -915,8 +1313,11 @@ app.post('/api/documents/:id/request-approval', (req, res) => {
   if (!doc) {
     return res.status(404).json({ error: 'Document not found.' });
   }
+  if (!canEditDocument(user, doc)) {
+    return res.status(403).json({ error: 'You do not have permission to submit this document for approval.' });
+  }
 
-  const requester = db.users.find(u => u.id === userId) || { fullName: 'Mohamed Bangura' };
+  const requester = user;
   const approver = db.users.find(u => u.id === approverId);
 
   if (!approver) {
@@ -961,20 +1362,30 @@ app.post('/api/documents/:id/request-approval', (req, res) => {
 
 // Process Approval Trigger
 app.post('/api/approvals/:id/decide', (req, res) => {
-  const userId = req.headers['x-user-id'] as string || 'manager-1';
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const userId = user.id;
   const { status, comment } = req.body; // status: 'Approved' | 'Changes Requested' | 'Rejected'
-  
+
+  const allowedStatuses = ['Approved', 'Changes Requested', 'Rejected'];
+  if (!allowedStatuses.includes(status)) {
+    return res.status(400).json({ error: 'Invalid approval decision.' });
+  }
+
   const approval = db.approvals.find(a => a.id === req.params.id);
   if (!approval) {
     return res.status(404).json({ error: 'Approval request registry trace not found.' });
+  }
+
+  // Only the assigned approver (or an Admin) may decide the request.
+  if (approval.approverId !== userId && user.role !== 'Admin') {
+    return res.status(403).json({ error: 'Only the assigned approver can decide this request.' });
   }
 
   const doc = db.documents.find(d => d.id === approval.documentId);
   if (!doc) {
     return res.status(404).json({ error: 'Target document was not found.' });
   }
-
-  const user = db.users.find(u => u.id === userId) || { id: 'manager-1', fullName: 'David Vance', email: 'david.v@smartdocs.org', role: 'Manager' as const, department: 'Finance', isActive: true };
 
   approval.status = status;
   approval.approvalComment = comment || `${status} feedback registered.`;
@@ -1007,13 +1418,18 @@ app.post('/api/approvals/:id/decide', (req, res) => {
 
 // Share Document with other users/roles
 app.post('/api/documents/:id/share', (req, res) => {
-  const userId = req.headers['x-user-id'] as string || 'staff-1';
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const userId = user.id;
   const { targetUserId, permissionType } = req.body;
   const docId = req.params.id;
 
   const doc = db.documents.find(d => d.id === docId);
   if (!doc) {
     return res.status(404).json({ error: 'Document not found.' });
+  }
+  if (!canEditDocument(user, doc)) {
+    return res.status(403).json({ error: 'You do not have permission to share this document.' });
   }
 
   const targetUser = db.users.find(u => u.id === targetUserId);
@@ -1046,12 +1462,17 @@ app.post('/api/documents/:id/share', (req, res) => {
 
 // Create External Secure sharing link
 app.post('/api/documents/:id/external-link', (req, res) => {
-  const userId = req.headers['x-user-id'] as string || 'staff-1';
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const userId = user.id;
   const docId = req.params.id;
 
   const doc = db.documents.find(d => d.id === docId);
   if (!doc) {
     return res.status(404).json({ error: 'Document not found.' });
+  }
+  if (!canEditDocument(user, doc)) {
+    return res.status(403).json({ error: 'You do not have permission to create a share link for this document.' });
   }
 
   // Token creation
@@ -1078,10 +1499,18 @@ app.post('/api/documents/:id/external-link', (req, res) => {
 
 // Revoke external sharing link
 app.post('/api/external-link/:token/revoke', (req, res) => {
-  const userId = req.headers['x-user-id'] as string || 'staff-1';
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const userId = user.id;
   const link = db.externalLinks.find(l => l.token === req.params.token);
   if (!link) {
     return res.status(404).json({ error: 'External token not found.' });
+  }
+
+  const linkedDoc = db.documents.find(d => d.id === link.documentId);
+  const mayRevoke = link.createdBy === userId || user.role === 'Admin' || (linkedDoc && canEditDocument(user, linkedDoc));
+  if (!mayRevoke) {
+    return res.status(403).json({ error: 'You do not have permission to revoke this link.' });
   }
 
   link.isActive = false;
@@ -1094,8 +1523,9 @@ app.post('/api/external-link/:token/revoke', (req, res) => {
 
 // Add inline Comment
 app.post('/api/comments', (req, res) => {
-  const userId = req.headers['x-user-id'] as string || 'staff-1';
-  const role = req.headers['x-user-role'] as string || 'Staff';
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const userId = user.id;
   const { documentId, text } = req.body;
 
   if (!documentId || !text || text.trim() === '') {
@@ -1106,15 +1536,16 @@ app.post('/api/comments', (req, res) => {
   if (!doc) {
     return res.status(404).json({ error: 'Target document was not found.' });
   }
-
-  const user = db.users.find(u => u.id === userId) || { id: 'staff-1', fullName: 'Mohamed Bangura', email: 'mohamedamadubangura@gmail.com', role: 'Staff' as const, department: 'Procurement', isActive: true };
+  if (!canViewDocument(user, doc)) {
+    return res.status(403).json({ error: 'You do not have access to this document.' });
+  }
 
   const newComment: Comment = {
     id: `c-${Date.now()}`,
     documentId,
     userId,
     userName: user.fullName,
-    userRole: role as any,
+    userRole: user.role,
     text,
     createdAt: new Date().toISOString()
   };
@@ -1126,16 +1557,82 @@ app.post('/api/comments', (req, res) => {
   res.json(newComment);
 });
 
-// Get Audit Logs (Admin or auditor scopes)
+// Get Audit Logs (Admin / Auditor scopes only)
 app.get('/api/activity', (req, res) => {
-  // Let's return sliced total log registries
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  if (user.role !== 'Admin' && user.role !== 'Auditor') {
+    return res.status(403).json({ error: 'Audit trail is restricted to Admin and Auditor roles.' });
+  }
   res.json(db.logs);
 });
 
-// Fetch active document logs
+// Fetch active document logs (must be able to view the document)
 app.get('/api/documents/:id/activity', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const doc = db.documents.find(d => d.id === req.params.id);
+  if (!doc) return res.status(404).json({ error: 'Document not found.' });
+  if (!canViewDocument(user, doc)) {
+    return res.status(403).json({ error: 'You do not have access to this document.' });
+  }
   const fileLogs = db.logs.filter(l => l.documentId === req.params.id);
   res.json(fileLogs);
+});
+
+// Approvals assigned to the current user that are awaiting a decision.
+app.get('/api/approvals/mine', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const mine = db.approvals
+    .filter(a => a.approverId === user.id && a.status === 'Pending Approval')
+    .map(a => {
+      const doc = db.documents.find(d => d.id === a.documentId && !d.isDeleted);
+      if (!doc) return null;
+      return {
+        ...a,
+        documentTitle: doc.title,
+        documentOwner: doc.ownerName,
+        documentType: doc.documentType,
+        documentDepartment: doc.department
+      };
+    })
+    .filter((a): a is NonNullable<typeof a> => a !== null)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  res.json(mine);
+});
+
+// Public access to a document via a secure external share link token.
+// Validates active state and expiry, increments the access counter, and
+// serves the latest version inline.
+app.get('/api/external/:token', (req, res) => {
+  const link = db.externalLinks.find(l => l.token === req.params.token);
+  if (!link) return res.status(404).send('This share link is invalid.');
+  if (!link.isActive) return res.status(403).send('This share link has been revoked.');
+  if (new Date(link.expiresAt).getTime() < Date.now()) {
+    return res.status(410).send('This share link has expired.');
+  }
+
+  const doc = db.documents.find(d => d.id === link.documentId && !d.isDeleted);
+  if (!doc) return res.status(404).send('The shared document is no longer available.');
+
+  link.accessCount = (link.accessCount || 0) + 1;
+  writeDb();
+  addAuditLog(link.createdBy, 'External Access', doc.id, doc.title, `Document opened via external secure link (view #${link.accessCount}).`);
+
+  const latest = db.versions
+    .filter(v => v.documentId === doc.id)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+
+  if (!latest || !latest.fileData) {
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    return res.send(doc.ocrText || 'No content available for this document.');
+  }
+
+  const buffer = storedFileToBuffer(latest.fileData);
+  res.setHeader('Content-Type', mimeForType(latest.fileType));
+  res.setHeader('Content-Disposition', `inline; filename="${latest.fileName}"`);
+  return res.send(buffer);
 });
 
 // Initialize Vite and setup HTML serving
@@ -1150,7 +1647,9 @@ async function startServer() {
     // Serve static files from compiled dist folder in production
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*all', (req, res) => {
+    // SPA fallback: serve index.html for any non-API GET (Express 4 compatible).
+    app.use((req, res, next) => {
+      if (req.method !== 'GET' || req.path.startsWith('/api/')) return next();
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

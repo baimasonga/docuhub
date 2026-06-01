@@ -12,11 +12,12 @@ import {
   Archive, 
   Trash2, 
   Plus, 
-  Building2, 
-  ShieldCheck, 
+  Building2,
+  ShieldCheck,
   History,
   FileHeart,
-  LayoutDashboard
+  LayoutDashboard,
+  Settings
 } from 'lucide-react';
 import { User } from '../types';
 
@@ -55,6 +56,7 @@ export default function Sidebar({
   // Specific admin tools
   const adminNavItems = [
     { id: 'departments', label: 'Departments Map', icon: Building2 },
+    { id: 'institution', label: 'Institution Profile', icon: Settings },
     { id: 'activity-log', label: 'Audit Trail Logs', icon: History },
   ];
 

@@ -12,6 +12,23 @@ export interface User {
   role: UserRole;
   department: string;
   isActive: boolean;
+  institutionId?: string; // which institution profile this user belongs to
+}
+
+// How a document category maps to a human-friendly folder name.
+export type CategoryFolderMap = Record<Document['documentType'], string>;
+
+// Optional third dimension in the auto-filing taxonomy.
+// 'none' => Unit/Category. 'ai-activity' => Unit/Category/<AI-extracted activity>.
+export type ActivityDimension = 'none' | 'ai-activity';
+
+// An institution's profile drives the automatic folder taxonomy and labels.
+export interface Institution {
+  id: string;
+  name: string;
+  units: string[];                 // unit/department names this institution uses
+  categoryFolders: CategoryFolderMap;
+  activityDimension: ActivityDimension;
 }
 
 export interface Department {
