@@ -1,0 +1,135 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+export type UserRole = 'Admin' | 'Manager' | 'Staff' | 'Viewer' | 'Auditor';
+
+export interface User {
+  id: string;
+  fullName: string;
+  email: string;
+  role: UserRole;
+  department: string;
+  isActive: boolean;
+}
+
+export interface Department {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface Folder {
+  id: string;
+  name: string;
+  parentFolderId: string | null; // null represents Root
+  ownerId: string;
+  department?: string; // department scope, e.g., 'Finance'
+  createdAt: string;
+}
+
+export type DocumentStatus = 'Draft' | 'Pending Approval' | 'Changes Requested' | 'Approved' | 'Rejected';
+export type ConfidentialityLevel = 'Normal File' | 'Official Record' | 'Confidential' | 'Archive';
+
+export interface Document {
+  id: string;
+  title: string;
+  description: string;
+  ownerId: string;
+  ownerName: string;
+  department?: string;
+  folderId: string | null; // null is 'root'
+  documentType: 'Contract' | 'Invoice' | 'Memo' | 'Report' | 'Support' | 'Other';
+  status: DocumentStatus;
+  confidentialityLevel: ConfidentialityLevel;
+  currentVersion: string; // e.g. "v1", "v2"
+  isStarred: boolean;
+  isArchived: boolean;
+  isDeleted: boolean;
+  tags: string[];
+  ocrText?: string; // AI extracted OCR text
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DocumentVersion {
+  id: string;
+  documentId: string;
+  fileName: string;
+  fileSize: number; // in bytes
+  fileType: string; // e.g. "pdf", "docx", "png", "txt"
+  versionNumber: string; // e.g. "v1", "v2"
+  uploadedBy: string; // userId
+  uploadedByName: string; // userName
+  fileData?: string; // Base64 data if uploaded, OR plain text
+  createdAt: string;
+}
+
+export type PermissionType = 'Viewer' | 'Commenter' | 'Editor' | 'Approver';
+
+export interface SharePermission {
+  id: string;
+  documentId: string;
+  sharedWithUserId: string;
+  permissionType: PermissionType;
+  sharedById: string;
+  createdAt: string;
+}
+
+export interface ApprovalRequest {
+  id: string;
+  documentId: string;
+  requestedBy: string; // userId
+  requestedByName: string;
+  approverId: string; // userId
+  approverName: string;
+  status: DocumentStatus;
+  requestComment: string;
+  approvalComment: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ActivityLog {
+  id: string;
+  userId: string;
+  userName: string;
+  userRole: UserRole;
+  action: string; // e.g., "Upload", "Preview", "Download", "Rename", "Move", "Share", "Approve", "Delete", "Restore"
+  documentId?: string;
+  documentTitle?: string;
+  details: string;
+  createdAt: string;
+}
+
+export interface Comment {
+  id: string;
+  documentId: string;
+  userId: string;
+  userName: string;
+  userRole: UserRole;
+  text: string;
+  createdAt: string;
+}
+
+export interface ExternalShareLink {
+  id: string;
+  documentId: string;
+  token: string;
+  createdBy: string;
+  permissionType: 'Viewer' | 'Commenter';
+  expiresAt: string;
+  isActive: boolean;
+  accessCount: number;
+  createdAt: string;
+}
+
+export interface DashboardStats {
+  totalFiles: number;
+  totalSize: number; // bytes
+  approvedCount: number;
+  pendingMyApprovalCount: number;
+  totalUsers: number;
+  recentUploadsCount: number;
+}

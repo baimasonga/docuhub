@@ -1,0 +1,6 @@
+{
+  "name": "Simple Document Management System",
+  "description": "A Google Drive-style file manager with automated AI-OCR tagging, permissions, versioning, search, and document approvals.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
