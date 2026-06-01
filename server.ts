@@ -8,6 +8,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { GoogleGenAI, Type } from '@google/genai';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { 
   User, 
@@ -59,7 +60,35 @@ function resolveDataDir(): string {
 
 const DB_DIR = resolveDataDir();
 const DB_FILE = path.join(DB_DIR, 'db.json');
-console.log(`[startup] Using data directory: ${DB_DIR}`);
+
+// ----------------------------------------------------
+// Persistence backend selection
+// ----------------------------------------------------
+// Durable persistence is backed by Supabase when SUPABASE_URL +
+// SUPABASE_SERVICE_ROLE_KEY are configured (the production path on Railway,
+// which has no persistent disk). The whole datastore is kept as a single JSONB
+// row, mirroring the previous single-file JSON model, so all in-memory logic is
+// unchanged. When the env vars are absent (e.g. local dev), we fall back to the
+// JSON file on disk so the app still runs with zero extra setup.
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
+const STATE_TABLE = 'docuhub_state';
+const STATE_ID = 'docuhub';
+const useSupabase = Boolean(SUPABASE_URL && SUPABASE_KEY);
+
+let supabase: SupabaseClient | null = null;
+if (useSupabase) {
+  supabase = createClient(SUPABASE_URL!, SUPABASE_KEY!, {
+    auth: { persistSession: false, autoRefreshToken: false }
+  });
+  console.log('[startup] Persistence backend: Supabase (durable)');
+} else {
+  console.log(`[startup] Persistence backend: local file at ${DB_FILE}`);
+}
+
+// Serialize Supabase writes through a single promise chain so concurrent
+// mutations persist in order (last write wins, consistently).
+let writeChain: Promise<void> = Promise.resolve();
 
 // Initial Mock Data
 const DEFAULT_INSTITUTION_ID = 'inst-smartdocs';
@@ -280,6 +309,20 @@ function migrateDb() {
 }
 
 function writeDb() {
+  if (useSupabase && supabase) {
+    // Snapshot synchronously so the persisted blob reflects this exact moment,
+    // even if db mutates again before the queued async upsert runs.
+    const snapshot = JSON.parse(JSON.stringify(db));
+    writeChain = writeChain
+      .then(async () => {
+        const { error } = await supabase!
+          .from(STATE_TABLE)
+          .upsert({ id: STATE_ID, data: snapshot, updated_at: new Date().toISOString() });
+        if (error) console.error('[supabase] Failed to persist state:', error.message);
+      })
+      .catch(err => console.error('[supabase] Persist chain error:', err));
+    return;
+  }
   try {
     // Write to a temp file then atomically rename so a crash mid-write cannot
     // leave a truncated/corrupt db.json behind.
@@ -291,8 +334,33 @@ function writeDb() {
   }
 }
 
-// Load seed on start
-readDb();
+// Load the datastore at startup. Supabase (durable) when configured, otherwise
+// the local JSON file. Returns once the in-memory db reflects persisted state.
+async function initStore(): Promise<void> {
+  if (useSupabase && supabase) {
+    try {
+      const { data, error } = await supabase
+        .from(STATE_TABLE)
+        .select('data')
+        .eq('id', STATE_ID)
+        .maybeSingle();
+      if (error) throw error;
+      if (data && data.data) {
+        db = { ...db, ...(data.data as typeof db) };
+        console.log('[startup] Loaded persisted state from Supabase.');
+      } else {
+        console.log('[startup] No existing Supabase state found; seeding initial data.');
+      }
+    } catch (err) {
+      console.error('[startup] Failed to load state from Supabase; using in-memory seed.', (err as Error).message);
+    }
+    migrateDb();
+    // Guarantee a row exists on first boot (and persist any migration backfill).
+    writeDb();
+  } else {
+    readDb();
+  }
+}
 
 // ----------------------------------------------------
 // Session-based identity (replaces spoofable x-user-* headers)
@@ -1652,6 +1720,10 @@ app.get('/api/external/:token', (req, res) => {
 
 // Initialize Vite (dev) or static serving (production) and start listening.
 async function startServer() {
+  // Load persisted state before accepting traffic so the first request sees a
+  // fully hydrated datastore.
+  await initStore();
+
   if (process.env.NODE_ENV !== 'production') {
     // Vite is a dev-only dependency for the API server; load it lazily so a
     // production bundle never requires it at startup.
