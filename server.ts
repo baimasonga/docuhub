@@ -25,14 +25,18 @@ import {
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+// Railway (and most PaaS) inject the port to bind via the PORT env var.
+const PORT = Number(process.env.PORT) || 3000;
 
 // Body parser
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// DB File Path
-const DB_DIR = path.join(process.cwd(), 'data');
+// DB File Path. DATA_DIR lets the JSON datastore live on a mounted persistent
+// volume in production (e.g. a Railway volume at /data) so it survives deploys.
+const DB_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DB_DIR, 'db.json');
 
 // Ensure db directory and file exist
@@ -536,6 +540,11 @@ app.post('/api/users/switch-profile', (req, res) => {
 app.get('/api/session', (req, res) => {
   const user = getUser(req);
   res.json({ user: user || null });
+});
+
+// Lightweight health check for the platform's uptime probe.
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', uptime: process.uptime(), timestamp: new Date().toISOString() });
 });
 
 // Get Database Info & Stats
