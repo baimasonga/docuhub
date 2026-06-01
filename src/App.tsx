@@ -200,24 +200,32 @@ export default function App() {
   const [decisionApprovalId, setDecisionApprovalId] = useState<string | null>(null);
   const [decisionComment, setDecisionComment] = useState('');
 
-  // Fetch Users & Initialize. We establish a server-side session for the
-  // default profile so identity is carried by an HttpOnly cookie rather than
-  // spoofable request headers.
+  // Fetch Users & Initialize. Identity is carried by an HttpOnly cookie. On
+  // mount we first restore any existing session (so a refresh or new tab keeps
+  // the current profile), and only fall back to a default profile if none.
   useEffect(() => {
     fetch('/api/users')
       .then(res => res.json())
       .then((data: User[]) => {
         setUsers(data);
-        const staff = data.find((u: User) => u.id === 'staff-1') || data[0];
-        if (!staff) return;
-        fetch('/api/users/switch-profile', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: staff.id })
-        })
+        return fetch('/api/session')
           .then(res => res.json())
-          .then(d => {
-            if (d.user) setCurrentUser(d.user);
+          .then(session => {
+            if (session && session.user) {
+              setCurrentUser(session.user);
+              return;
+            }
+            const staff = data.find((u: User) => u.id === 'staff-1') || data[0];
+            if (!staff) return;
+            return fetch('/api/users/switch-profile', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId: staff.id })
+            })
+              .then(res => res.json())
+              .then(d => {
+                if (d.user) setCurrentUser(d.user);
+              });
           });
       });
   }, []);

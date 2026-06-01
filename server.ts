@@ -241,6 +241,27 @@ function readDb() {
   } catch (err) {
     console.error('Error reading db file, falling back to in-memory seed.', err);
   }
+  migrateDb();
+}
+
+// Backfill data persisted before newer fields existed (e.g. a Railway volume or
+// local data dir from an earlier version), so upgrades stay functional.
+function migrateDb() {
+  let changed = false;
+  // Ensure at least one institution exists.
+  if (!Array.isArray(db.institutions) || db.institutions.length === 0) {
+    db.institutions = DEFAULT_INSTITUTIONS;
+    changed = true;
+  }
+  const fallbackInstitutionId = db.institutions[0].id;
+  // Legacy users may predate institutionId; assign them to the default.
+  for (const user of db.users) {
+    if (!user.institutionId) {
+      user.institutionId = fallbackInstitutionId;
+      changed = true;
+    }
+  }
+  if (changed) writeDb();
 }
 
 function writeDb() {
@@ -712,7 +733,9 @@ app.put('/api/institution', (req, res) => {
     return res.status(403).json({ error: 'Only an Admin can edit the institution profile.' });
   }
 
-  const inst = db.institutions.find(i => i.id === user.institutionId);
+  // Fall back to the first institution if the user's id is missing/stale, so a
+  // legacy (pre-migration) admin can still edit a real, persisted profile.
+  const inst = db.institutions.find(i => i.id === user.institutionId) || db.institutions[0];
   if (!inst) return res.status(404).json({ error: 'Institution not found.' });
 
   const { name, units, categoryFolders, activityDimension } = req.body || {};
