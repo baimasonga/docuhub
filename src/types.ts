@@ -66,6 +66,9 @@ export interface Document {
   isDeleted: boolean;
   tags: string[];
   ocrText?: string; // AI extracted OCR text
+  fileName?: string; // latest version file name, added by API responses
+  fileSize?: number; // latest version file size, added by API responses
+  fileType?: string; // latest version MIME/extension, added by API responses
   createdAt: string;
   updatedAt: string;
 }

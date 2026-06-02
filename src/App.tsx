@@ -120,8 +120,8 @@ function downloadHref(fileData: string | undefined, fileType?: string): string {
     : `data:${mime};charset=utf-8,${encodeURIComponent(data)}`;
 }
 
-function getFileFormatInfo(fileType: string, docType?: string): { label: string; bg: string; text: string; Icon: React.ElementType } {
-  const t = (fileType || '').toLowerCase();
+function getFileFormatInfo(fileType: string, docType?: string, fileName?: string): { label: string; bg: string; text: string; Icon: React.ElementType } {
+  const t = `${fileType || ''} ${fileName || ''}`.toLowerCase();
   const d = (docType || '').toLowerCase();
 
   if (t.includes('pdf')) return { label: 'PDF', bg: 'bg-red-50', text: 'text-red-600', Icon: FileText };
@@ -135,13 +135,15 @@ function getFileFormatInfo(fileType: string, docType?: string): { label: string;
     return { label: 'ZIP', bg: 'bg-amber-50', text: 'text-amber-600', Icon: File };
   if (t.includes('json') || t.includes('xml') || t.includes('html') || t.includes('javascript') || t.includes('typescript'))
     return { label: 'CODE', bg: 'bg-orange-50', text: 'text-orange-600', Icon: FileCode };
-  if (t.includes('text') || t.includes('txt') || t.includes('plain'))
+  if (t.includes('.log') || t.includes('x-log'))
+    return { label: 'LOG', bg: 'bg-cyan-50', text: 'text-cyan-600', Icon: FileText };
+  if (t.includes('text') || t.includes('txt') || t.includes('plain') || t.includes('.md') || t.includes('.rtf'))
     return { label: 'TXT', bg: 'bg-slate-100', text: 'text-slate-500', Icon: FileText };
   return { label: 'FILE', bg: 'bg-slate-100', text: 'text-slate-500', Icon: File };
 }
 
-function FileFormatBadge({ fileType, docType, size = 'sm' }: { fileType?: string; docType?: string; size?: 'sm' | 'md' | 'lg' }) {
-  const { label, bg, text, Icon } = getFileFormatInfo(fileType || '', docType);
+function FileFormatBadge({ fileType, docType, fileName, size = 'sm' }: { fileType?: string; docType?: string; fileName?: string; size?: 'sm' | 'md' | 'lg' }) {
+  const { label, bg, text, Icon } = getFileFormatInfo(fileType || '', docType, fileName);
   const iconSize = size === 'lg' ? 'w-5 h-5' : size === 'md' ? 'w-4.5 h-4.5' : 'w-4 h-4';
   const pad = size === 'lg' ? 'p-2.5' : 'p-2';
   return (
@@ -166,6 +168,8 @@ export default function App() {
     documentOwner: string;
     documentType: string;
     documentDepartment?: string;
+    fileName?: string;
+    fileType?: string;
   })[]>([]);
   const [currentView, setCurrentView] = useState<string>('dashboard');
   
@@ -829,7 +833,7 @@ export default function App() {
         body: JSON.stringify({
           fileName: file.name,
           fileSize: file.size,
-          fileType: file.type || 'text/plain',
+          fileType: detectFileType(file),
           fileData: base64Content
         })
       })
@@ -1513,7 +1517,7 @@ export default function App() {
                             >
                               <td className="py-3 px-3">
                                 <div className="flex items-center space-x-2.5">
-                                  <FileFormatBadge fileType={doc.fileType} docType={doc.documentType} size="sm" />
+                                  <FileFormatBadge fileType={doc.fileType} docType={doc.documentType} fileName={doc.fileName} size="sm" />
                                   <span className="font-semibold text-slate-700 truncate max-w-[200px]">{doc.title}</span>
                                 </div>
                               </td>
@@ -1768,7 +1772,7 @@ export default function App() {
                               </td>
                               <td className="py-3 px-4">
                                 <div className="flex items-center space-x-3">
-                                  <FileFormatBadge fileType={doc.fileType} docType={doc.documentType} size="md" />
+                                  <FileFormatBadge fileType={doc.fileType} docType={doc.documentType} fileName={doc.fileName} size="md" />
                                   <div className="min-w-0">
                                     <p className="font-semibold text-slate-800 truncate max-w-[240px]">{doc.title}</p>
                                     <p className="text-[9px] text-slate-400 mt-0.5">Owner: {doc.ownerName} • {doc.currentVersion}</p>
@@ -1939,7 +1943,7 @@ export default function App() {
                           <tr key={appr.id} className="hover:bg-slate-50/80 transition-colors">
                             <td className="py-3 px-4">
                               <div className="flex items-center space-x-3">
-                                <FileFormatBadge fileType={appr.documentType} docType={appr.documentType} size="md" />
+                                <FileFormatBadge fileType={appr.fileType} docType={appr.documentType} fileName={appr.fileName} size="md" />
                                 <div className="min-w-0">
                                   <p className="font-semibold text-slate-800 truncate max-w-[240px]">{appr.documentTitle}</p>
                                   <p className="text-[9px] text-slate-400 mt-0.5">{appr.documentType} • {appr.documentDepartment || 'GLOBAL'}</p>
@@ -2080,7 +2084,7 @@ export default function App() {
           {/* Header detail */}
           <div className="p-5 border-b border-slate-50 flex items-start justify-between bg-slate-50/50">
             <div className="flex items-center space-x-2.5">
-              <FileFormatBadge fileType={docDetail.document.fileType} docType={docDetail.document.documentType} size="lg" />
+              <FileFormatBadge fileType={docDetail.document.fileType} docType={docDetail.document.documentType} fileName={docDetail.document.fileName} size="lg" />
               <div className="min-w-0">
                 <h3 className="text-xs font-bold text-slate-800 truncate max-w-[200px]">{docDetail.document.title}</h3>
                 <p className="text-[10px] text-slate-400 mt-0.5">UUID: {docDetail.document.id}</p>

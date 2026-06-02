@@ -395,6 +395,22 @@ function mimeForType(fileType?: string): string {
   return 'text/plain';
 }
 
+function latestVersionForDocument(documentId: string): DocumentVersion | undefined {
+  return db.versions
+    .filter(v => v.documentId === documentId)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+}
+
+function withLatestFileMetadata<T extends Document>(doc: T): T & Pick<DocumentVersion, 'fileName' | 'fileSize' | 'fileType'> {
+  const latest = latestVersionForDocument(doc.id);
+  return {
+    ...doc,
+    fileName: latest?.fileName || doc.fileName || '',
+    fileSize: latest?.fileSize || doc.fileSize || 0,
+    fileType: latest?.fileType || doc.fileType || ''
+  };
+}
+
 // ----------------------------------------------------
 // Institution profiles & automatic document filing
 // ----------------------------------------------------
@@ -1174,7 +1190,7 @@ app.get('/api/documents', (req, res) => {
     );
   }
 
-  res.json(docs);
+  res.json(docs.map(withLatestFileMetadata));
 });
 
 // Single Document Detail
@@ -1212,7 +1228,7 @@ app.get('/api/documents/:id', (req, res) => {
   const links = db.externalLinks.filter(l => l.documentId === doc.id && l.isActive);
 
   res.json({
-    document: doc,
+    document: withLatestFileMetadata(doc),
     versions,
     comments,
     approvals,
@@ -1927,12 +1943,15 @@ app.get('/api/approvals/mine', (req, res) => {
     .map(a => {
       const doc = db.documents.find(d => d.id === a.documentId && !d.isDeleted);
       if (!doc) return null;
+      const latest = latestVersionForDocument(doc.id);
       return {
         ...a,
         documentTitle: doc.title,
         documentOwner: doc.ownerName,
         documentType: doc.documentType,
-        documentDepartment: doc.department
+        documentDepartment: doc.department,
+        fileName: latest?.fileName || '',
+        fileType: latest?.fileType || ''
       };
     })
     .filter((a): a is NonNullable<typeof a> => a !== null)
