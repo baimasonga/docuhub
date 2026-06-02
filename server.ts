@@ -364,6 +364,27 @@ function canEditDocument(user: Pick<User, 'id' | 'role'>, doc: Document): boolea
   );
 }
 
+function canDeleteFolder(user: Pick<User, 'id' | 'role'>, folder: Folder): boolean {
+  return user.role === 'Admin' || user.role === 'Manager' || folder.ownerId === user.id;
+}
+
+function collectFolderTreeIds(folderId: string): string[] {
+  const ids = new Set<string>([folderId]);
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    for (const folder of db.folders) {
+      if (folder.parentFolderId && ids.has(folder.parentFolderId) && !ids.has(folder.id)) {
+        ids.add(folder.id);
+        changed = true;
+      }
+    }
+  }
+
+  return Array.from(ids);
+}
+
 // Map a stored fileType to a sensible MIME type for downloads / inline serving.
 function mimeForType(fileType?: string): string {
   const t = (fileType || '').toLowerCase();
@@ -1043,6 +1064,46 @@ app.post('/api/folders', (req, res) => {
   
   addAuditLog(userId, 'Create Folder', undefined, name, `Created a folder: "${name}"`);
   res.status(201).json(newFolder);
+});
+
+// Delete Folder and move contained documents to Trash
+app.delete('/api/folders/:id', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+
+  const folder = db.folders.find(f => f.id === req.params.id);
+  if (!folder) {
+    return res.status(404).json({ error: 'Folder not found.' });
+  }
+  if (!canDeleteFolder(user, folder)) {
+    return res.status(403).json({ error: 'You do not have permission to delete this folder.' });
+  }
+
+  const folderIds = collectFolderTreeIds(folder.id);
+  const folderIdSet = new Set(folderIds);
+  const docsInTree = db.documents.filter(d => d.folderId && folderIdSet.has(d.folderId));
+  const protectedDoc = docsInTree.find(d => !canEditDocument(user, d));
+  if (protectedDoc) {
+    return res.status(403).json({ error: `You do not have permission to delete document "${protectedDoc.title}" in this folder.` });
+  }
+
+  const now = new Date().toISOString();
+  for (const doc of docsInTree) {
+    doc.isDeleted = true;
+    doc.folderId = null;
+    doc.updatedAt = now;
+  }
+  db.folders = db.folders.filter(f => !folderIdSet.has(f.id));
+  writeDb();
+
+  addAuditLog(
+    user.id,
+    'Delete Folder',
+    undefined,
+    folder.name,
+    `Deleted folder "${folder.name}" plus ${folderIds.length - 1} subfolder(s), moving ${docsInTree.length} contained document(s) to Trash.`
+  );
+  res.json({ success: true, deletedFolderIds: folderIds, trashedDocumentCount: docsInTree.length });
 });
 
 // Documents search and lists
