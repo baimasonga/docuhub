@@ -1740,7 +1740,9 @@ async function startServer() {
     // SPA fallback: serve index.html for any non-API GET (Express 4 compatible).
     app.use((req, res, next) => {
       if (req.method !== 'GET' || req.path.startsWith('/api/')) return next();
-      res.sendFile(path.join(distPath, 'index.html'));
+      res.sendFile(path.join(distPath, 'index.html'), { root: '/' }, (err) => {
+        if (err) next(err);
+      });
     });
   }
 
