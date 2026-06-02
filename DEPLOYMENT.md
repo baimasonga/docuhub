@@ -1,6 +1,6 @@
-# Deploying VaultDMS to Railway
+# Deploying Chore Box DMS to Railway
 
-VaultDMS is a single Express server that serves both the API and the compiled
+Chore Box DMS is a single Express server that serves both the API and the compiled
 React SPA. Data persists to **Supabase** when configured, or falls back to a
 local JSON file.
 

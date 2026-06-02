@@ -1,6 +1,6 @@
 {
-  "name": "VaultDMS",
-  "description": "VaultDMS — a Google Drive-style secure document manager with automated AI-OCR tagging, permissions, versioning, search, shareable links, and document approvals.",
+  "name": "Chore Box DMS",
+  "description": "Chore Box DMS — a Google Drive-style secure document manager with automated AI-OCR tagging, permissions, versioning, search, shareable links, and document approvals.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
