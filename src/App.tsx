@@ -209,6 +209,16 @@ export default function App() {
   const [upCustomFile, setUpCustomFile] = useState<{ name: string; content: string; size: number; type: string } | null>(null);
   const [upDept, setUpDept] = useState('');
   const [upAutoFile, setUpAutoFile] = useState(true);
+  const [uploadScan, setUploadScan] = useState<{
+    documentType: Document['documentType'];
+    description: string;
+    tags: string[];
+    activity?: string;
+    filedInto: string;
+    cabinetExists: boolean;
+    missingCabinets: string[];
+  } | null>(null);
+  const [uploadScanLoading, setUploadScanLoading] = useState(false);
 
   // Institution profile that drives automatic folder filing (Unit -> Category
   // [-> Activity]).
@@ -472,15 +482,56 @@ export default function App() {
     .catch(() => triggerToast('Could not create cabinet. Please try again.', 'error'));
   };
 
+  const scanUploadCandidate = async (candidate: { fileName: string; fileType: string; fileData: string; department?: string }) => {
+    if (!currentUser) return;
+    setUploadScanLoading(true);
+    setUploadScan(null);
+    try {
+      const res = await fetch('/api/documents/scan', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': currentUser.id,
+          'x-user-role': currentUser.role,
+          'x-user-department': currentUser.department
+        },
+        body: JSON.stringify({
+          fileName: candidate.fileName,
+          fileType: candidate.fileType,
+          fileData: candidate.fileData,
+          department: candidate.department || upDept || currentUser.department
+        })
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || 'Could not scan selected document.');
+      setUploadScan(data);
+      setUpCategory(data.documentType || 'Other');
+      if (data.description) setUpDesc(data.description);
+    } catch (err: any) {
+      setUploadScan(null);
+      triggerToast(err?.message || 'Could not scan selected document.', 'error');
+    } finally {
+      setUploadScanLoading(false);
+    }
+  };
+
   // Load Preset Details helper
   const handlePresetSelect = (idx: number) => {
     setUpPresetIndex(idx);
+    setUploadScan(null);
     if (idx >= 0) {
       const preset = SAMPLE_PRESETS[idx];
+      const encoded = btoa(preset.textValue);
       setUpTitle(preset.title);
-      setUpDesc(`OCR Scanning target from preset: ${preset.fileName}`);
-      setUpCategory(preset.category as any);
+      setUpDesc('');
+      setUpCategory('Other');
       setUpCustomFile(null);
+      scanUploadCandidate({
+        fileName: preset.fileName,
+        fileType: preset.fileType,
+        fileData: encoded,
+        department: upDept || currentUser?.department
+      });
     } else {
       setUpTitle('');
       setUpDesc('');
@@ -530,7 +581,8 @@ export default function App() {
         title: upTitle,
         description: upDesc,
         folderId: currentFolderId,
-        documentType: upCategory,
+        documentType: uploadScan?.documentType || upCategory,
+        categoryMode: 'auto',
         fileName: filename,
         fileSize: size,
         fileType: type,
@@ -558,6 +610,7 @@ export default function App() {
         setUpTitle('');
         setUpDesc('');
         setUpCustomFile(null);
+        setUploadScan(null);
         setUpAutoFile(true);
         reloadData();
       }
@@ -609,6 +662,9 @@ export default function App() {
     });
     setUpTitle(file.name.replace(/\.[^/.]+$/, ""));
     setUpPresetIndex(-1);
+    setUpDesc('');
+    setUpCategory('Other');
+    await scanUploadCandidate({ fileName: file.name, fileType: detectFileType(file), fileData: base64Content, department: upDept || currentUser?.department });
   };
 
   // Upload file custom handler
@@ -628,7 +684,7 @@ export default function App() {
     setUpDesc('');
     setUpCategory('Other');
     setUpDept(currentUser.department);
-    setUpAutoFile(false);
+    setUpAutoFile(true);
     setSelectedUploadFile(file)
       .then(() => setShowUploadModal(true))
       .catch(() => triggerToast('Could not read the selected file.', 'error'));
@@ -2402,6 +2458,43 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Pre-upload scan result */}
+              <div className="rounded-xl border border-sky-100 bg-sky-50/50 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center space-x-1 text-[11px] font-bold text-sky-800">
+                    {uploadScanLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin text-sky-600" /> : <Sparkles className="w-3.5 h-3.5 text-sky-600" />}
+                    <span>Pre-upload smart scan</span>
+                  </span>
+                  {uploadScan && (
+                    <span className="rounded-full bg-white px-2 py-0.5 text-[9px] font-black text-sky-700 border border-sky-100">
+                      {uploadScan.documentType}
+                    </span>
+                  )}
+                </div>
+                <p className="text-[10px] text-slate-500 leading-relaxed">
+                  {uploadScanLoading
+                    ? 'Scanning content to detect the document category and destination cabinet before upload...'
+                    : uploadScan
+                      ? uploadScan.description
+                      : 'Choose a preset or file and DocuHub will scan it first, classify it, then route it to the matching cabinet.'}
+                </p>
+                {uploadScan && (
+                  <div className="space-y-1.5">
+                    <div className="flex flex-wrap gap-1">
+                      {uploadScan.tags.slice(0, 5).map(tag => (
+                        <span key={tag} className="rounded-full bg-white border border-sky-100 px-2 py-0.5 text-[9px] font-bold text-slate-500">#{tag}</span>
+                      ))}
+                    </div>
+                    {!uploadScan.cabinetExists && uploadScan.missingCabinets.length > 0 && (
+                      <p className="flex items-start gap-1.5 text-[10px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1.5">
+                        <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                        <span>Missing cabinet{uploadScan.missingCabinets.length === 1 ? '' : 's'} will be created automatically: {uploadScan.missingCabinets.join(' / ')}.</span>
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* Automatic Smart Filing */}
               <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 space-y-2">
                 <label className="flex items-start space-x-2.5 cursor-pointer select-none">
@@ -2426,7 +2519,7 @@ export default function App() {
                   <div className="flex items-center space-x-2 text-[10px] bg-white rounded-lg border border-indigo-100 px-2.5 py-1.5">
                     <CornerDownRight className="w-3 h-3 text-indigo-500 shrink-0" />
                     <span className="text-slate-400 font-mono uppercase tracking-wider text-[9px]">Destination</span>
-                    <span className="font-bold text-indigo-700 truncate">{autoFilePreview()}</span>
+                    <span className="font-bold text-indigo-700 truncate">{uploadScan?.filedInto || autoFilePreview()}</span>
                   </div>
                 ) : (
                   <p className="text-[10px] text-slate-500 pl-6">
@@ -2437,9 +2530,11 @@ export default function App() {
 
               <button
                 type="submit"
-                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-100 mt-4 h-10 flex items-center justify-center space-x-1"
+                disabled={uploadScanLoading}
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-100 mt-4 h-10 flex items-center justify-center space-x-1"
               >
-                <span>Initialize Cloud Storage Upload (AI-OCR Indexing)</span>
+                {uploadScanLoading && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                <span>{uploadScanLoading ? 'Scanning before upload...' : 'Upload to detected cabinet'}</span>
               </button>
 
             </form>
