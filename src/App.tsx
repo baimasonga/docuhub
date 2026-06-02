@@ -2000,19 +2000,6 @@ export default function App() {
             </div>
           )}
 
-          {/* VIEW: INSTITUTION PROFILE (auto-filing taxonomy) */}
-          {currentView === 'institution' && currentUser && (
-            <InstitutionProfileView
-              currentUser={currentUser}
-              onSaved={(inst) => {
-                setOrgProfile(inst);
-                triggerToast('Institution profile updated.', 'success');
-                reloadData();
-              }}
-            />
-          )}
-
-
           {/* VIEW: USER MANAGEMENT */}
           {currentView === 'user-management' && currentUser && (
             <UserManagementView
@@ -3176,6 +3163,13 @@ function SettingsView({
   orgProfile: Institution | null;
   onSaved: (inst: Institution) => void;
 }) {
+  const [activeTab, setActiveTab] = useState<'overview' | 'institution'>('overview');
+
+  const tabs = [
+    { id: 'overview' as const, label: 'Overview', icon: Database },
+    { id: 'institution' as const, label: 'Institution Profile', icon: Building2 }
+  ];
+
   return (
     <div className="space-y-5">
       <div>
@@ -3183,30 +3177,58 @@ function SettingsView({
         <p className="text-xs text-slate-400">Configure workspace defaults, filing taxonomy, and account access controls.</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
-          <p className="text-[10px] font-mono font-bold text-slate-400 uppercase mb-1">Current Workspace</p>
-          <h3 className="font-display font-bold text-slate-800">{orgProfile?.name || 'Workspace'}</h3>
-          <p className="text-[11px] text-slate-400 mt-1">{orgProfile?.units?.length || 0} department units configured.</p>
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div className="flex border-b border-slate-100 bg-slate-50/60 p-1" role="tablist" aria-label="Settings sections">
+          {tabs.map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center space-x-2 rounded-xl px-3 py-2 text-xs font-bold transition-all ${
+                  isActive
+                    ? 'bg-white text-indigo-700 shadow-sm border border-slate-100'
+                    : 'text-slate-500 hover:text-slate-700 hover:bg-white/70'
+                }`}
+              >
+                <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-indigo-600' : 'text-slate-400'}`} />
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
         </div>
-        <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
-          <p className="text-[10px] font-mono font-bold text-slate-400 uppercase mb-1">Document Scope</p>
-          <h3 className="font-display font-bold text-slate-800">{stats?.totalFiles ?? 0} visible files</h3>
-          <p className="text-[11px] text-slate-400 mt-1">Archive, trash, and approval counts remain role-aware.</p>
-        </div>
-        <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
-          <p className="text-[10px] font-mono font-bold text-slate-400 uppercase mb-1">Signed In Role</p>
-          <h3 className="font-display font-bold text-slate-800">{currentUser.role}</h3>
-          <p className="text-[11px] text-slate-400 mt-1">{currentUser.department} department access.</p>
-        </div>
-      </div>
 
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-        <div className="flex items-center space-x-2 mb-3">
-          <Database className="w-4 h-4 text-indigo-600" />
-          <h3 className="font-display font-extrabold text-slate-800 text-sm">Filing & Institution Settings</h3>
+        <div className="p-4">
+          {activeTab === 'overview' && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4" role="tabpanel">
+              <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+                <p className="text-[10px] font-mono font-bold text-slate-400 uppercase mb-1">Current Workspace</p>
+                <h3 className="font-display font-bold text-slate-800">{orgProfile?.name || 'Workspace'}</h3>
+                <p className="text-[11px] text-slate-400 mt-1">{orgProfile?.units?.length || 0} department units configured.</p>
+              </div>
+              <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+                <p className="text-[10px] font-mono font-bold text-slate-400 uppercase mb-1">Document Scope</p>
+                <h3 className="font-display font-bold text-slate-800">{stats?.totalFiles ?? 0} visible files</h3>
+                <p className="text-[11px] text-slate-400 mt-1">Archive, trash, and approval counts remain role-aware.</p>
+              </div>
+              <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+                <p className="text-[10px] font-mono font-bold text-slate-400 uppercase mb-1">Signed In Role</p>
+                <h3 className="font-display font-bold text-slate-800">{currentUser.role}</h3>
+                <p className="text-[11px] text-slate-400 mt-1">{currentUser.department} department access.</p>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'institution' && (
+            <div role="tabpanel">
+              <InstitutionProfileView currentUser={currentUser} onSaved={onSaved} />
+            </div>
+          )}
         </div>
-        <InstitutionProfileView currentUser={currentUser} onSaved={onSaved} />
       </div>
     </div>
   );
