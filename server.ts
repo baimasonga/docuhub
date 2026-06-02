@@ -475,6 +475,61 @@ function categoryFolderName(inst: Institution, category: Document['documentType'
   return inst.categoryFolders[category] || inst.categoryFolders.Other || category;
 }
 
+
+function coerceDocumentCategory(value: unknown): Document['documentType'] | null {
+  return DOCUMENT_CATEGORIES.includes(value as Document['documentType'])
+    ? value as Document['documentType']
+    : null;
+}
+
+function findFolder(
+  name: string,
+  parentFolderId: string | null,
+  department: string | undefined
+): Folder | undefined {
+  return db.folders.find(
+    f =>
+      f.parentFolderId === parentFolderId &&
+      f.name.toLowerCase() === name.toLowerCase() &&
+      (department ? (f.department || undefined) === department : true)
+  );
+}
+
+function previewAutoFolder(
+  inst: Institution,
+  department: string | undefined,
+  category: Document['documentType'],
+  activity?: string
+): { path: string; exists: boolean; missingCabinets: string[] } {
+  const unitName = department && department.trim() ? department.trim() : 'Unassigned Unit';
+  const categoryName = categoryFolderName(inst, category);
+  const activityName = inst.activityDimension === 'ai-activity' ? normalizeActivity(activity) : null;
+  const pathParts = activityName ? [unitName, categoryName, activityName] : [unitName, categoryName];
+
+  const missingCabinets: string[] = [];
+  const unitFolder = findFolder(unitName, null, department);
+  if (!unitFolder) {
+    missingCabinets.push(unitName);
+    if (categoryName) missingCabinets.push(categoryName);
+    if (activityName) missingCabinets.push(activityName);
+    return { path: pathParts.join(' / '), exists: false, missingCabinets };
+  }
+
+  const categoryFolder = findFolder(categoryName, unitFolder.id, department);
+  if (!categoryFolder) {
+    missingCabinets.push(categoryName);
+    if (activityName) missingCabinets.push(activityName);
+    return { path: pathParts.join(' / '), exists: false, missingCabinets };
+  }
+
+  if (activityName && !findFolder(activityName, categoryFolder.id, department)) {
+    missingCabinets.push(activityName);
+    return { path: pathParts.join(' / '), exists: false, missingCabinets };
+  }
+
+  return { path: pathParts.join(' / '), exists: true, missingCabinets };
+}
+
 function slugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'item';
 }
@@ -1173,6 +1228,44 @@ app.get('/api/documents/:id', (req, res) => {
   });
 });
 
+
+// Scan a file before upload so the client can show the detected category,
+// suggested metadata, and smart-cabinet destination before the document is
+// persisted. This does not create folders; creation happens during upload.
+app.post('/api/documents/scan', async (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated. Please select a profile.' });
+
+  const { fileName, fileType, fileData, department } = req.body || {};
+  if (!fileName || !fileData) {
+    return res.status(400).json({ error: 'File name and file data stream are required for scanning.' });
+  }
+
+  try {
+    const aiResult = await runAiOcrAndTagging(
+      String(fileName),
+      String(fileType || 'text/plain'),
+      String(fileData)
+    );
+    const institution = getInstitution(user.institutionId);
+    const finalCategory = coerceDocumentCategory(aiResult.documentType) || 'Other';
+    const finalDept = String(department || user.department || '').trim() || user.department;
+    const filing = previewAutoFolder(institution, finalDept, finalCategory, aiResult.activity);
+
+    res.json({
+      ...aiResult,
+      documentType: finalCategory,
+      department: finalDept,
+      filedInto: filing.path,
+      cabinetExists: filing.exists,
+      missingCabinets: filing.missingCabinets
+    });
+  } catch (err: any) {
+    console.error('Pre-upload document scan failed:', err);
+    res.status(500).json({ error: 'Failed to scan document before upload.', details: err.message });
+  }
+});
+
 // Upload File (with OCR & Tagging base64 payload)
 app.post('/api/documents/upload', async (req, res) => {
   const user = getUser(req);
@@ -1180,13 +1273,14 @@ app.post('/api/documents/upload', async (req, res) => {
   const userId = user.id;
   const dept = user.department;
 
-  const { title, description, folderId, documentType, fileName, fileSize, fileType, fileData, department, autoFile } = req.body;
+  const { title, description, folderId, documentType, fileName, fileSize, fileType, fileData, department, autoFile, categoryMode } = req.body;
 
   if (!title || !fileName || !fileData) {
     return res.status(400).json({ error: 'Title, file name, and file data stream are required.' });
   }
 
-  if (documentType !== undefined && !DOCUMENT_CATEGORIES.includes(documentType as Document['documentType'])) {
+  const manualCategory = coerceDocumentCategory(documentType);
+  if (documentType !== undefined && documentType !== null && documentType !== '' && !manualCategory) {
     return res.status(400).json({ error: 'Invalid document category.' });
   }
 
@@ -1208,7 +1302,10 @@ app.post('/api/documents/upload', async (req, res) => {
 
     // Resolve final classification, then route into a folder accordingly,
     // using the uploader's institution profile to drive the taxonomy.
-    const finalCategory: Document['documentType'] = (documentType as any) || aiResult.documentType || 'Other';
+    const scannedCategory = coerceDocumentCategory(aiResult.documentType) || 'Other';
+    const finalCategory: Document['documentType'] = categoryMode === 'manual' && manualCategory
+      ? manualCategory
+      : scannedCategory;
     const finalDept = department || dept;
     const institution = getInstitution(user.institutionId);
 
