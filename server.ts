@@ -772,9 +772,111 @@ Format the output strictly as JSON matching this shape:
 // API ROUTES
 // ----------------------------------------------------
 
+function requireAdmin(req: express.Request, res: express.Response): User | null {
+  const user = getUser(req);
+  if (!user) {
+    res.status(401).json({ error: 'Not authenticated.' });
+    return null;
+  }
+  if (user.role !== 'Admin') {
+    res.status(403).json({ error: 'Only an Admin can manage users.' });
+    return null;
+  }
+  return user;
+}
+
+const USER_ROLES: User['role'][] = ['Admin', 'Manager', 'Staff', 'Viewer', 'Auditor'];
+
+function sanitizeUserPayload(body: Partial<User>): { value?: Omit<User, 'id'>; error?: string } {
+  const fullName = String(body.fullName || '').trim();
+  const email = String(body.email || '').trim().toLowerCase();
+  const role = body.role as User['role'];
+  const department = String(body.department || '').trim();
+  const institutionId = body.institutionId ? String(body.institutionId) : DEFAULT_INSTITUTION_ID;
+
+  if (!fullName) return { error: 'Full name is required.' };
+  if (!email || !/^\S+@\S+\.\S+$/.test(email)) return { error: 'A valid email address is required.' };
+  if (!USER_ROLES.includes(role)) return { error: 'A valid role is required.' };
+  if (!department) return { error: 'Department is required.' };
+  if (!db.institutions.some(i => i.id === institutionId)) return { error: 'Selected institution does not exist.' };
+
+  return {
+    value: {
+      fullName,
+      email,
+      role,
+      department,
+      isActive: body.isActive !== false,
+      institutionId
+    }
+  };
+}
+
 // Users List
 app.get('/api/users', (req, res) => {
   res.json(db.users);
+});
+
+// Create a user profile (Admin only).
+app.post('/api/users', (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+
+  const parsed = sanitizeUserPayload(req.body || {});
+  if (parsed.error || !parsed.value) return res.status(400).json({ error: parsed.error });
+  if (db.users.some(u => u.email.toLowerCase() === parsed.value!.email)) {
+    return res.status(409).json({ error: 'A user with this email already exists.' });
+  }
+
+  const user: User = {
+    id: `user-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+    ...parsed.value
+  };
+
+  db.users.push(user);
+  writeDb();
+  addAuditLog(admin.id, 'Create User', undefined, user.fullName, `Created user profile for ${user.fullName} (${user.role}).`);
+  res.status(201).json(user);
+});
+
+// Update a user profile (Admin only).
+app.put('/api/users/:id', (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+
+  const target = db.users.find(u => u.id === req.params.id);
+  if (!target) return res.status(404).json({ error: 'User not found.' });
+
+  const parsed = sanitizeUserPayload({ ...target, ...(req.body || {}) });
+  if (parsed.error || !parsed.value) return res.status(400).json({ error: parsed.error });
+
+  const duplicate = db.users.find(u => u.id !== target.id && u.email.toLowerCase() === parsed.value!.email);
+  if (duplicate) return res.status(409).json({ error: 'A user with this email already exists.' });
+
+  Object.assign(target, parsed.value);
+  writeDb();
+  addAuditLog(admin.id, 'Update User', undefined, target.fullName, `Updated user profile for ${target.fullName} (${target.role}).`);
+  res.json(target);
+});
+
+// Toggle active status (Admin only). The last Admin cannot be disabled.
+app.post('/api/users/:id/toggle-active', (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+
+  const target = db.users.find(u => u.id === req.params.id);
+  if (!target) return res.status(404).json({ error: 'User not found.' });
+
+  const nextActive = req.body?.isActive !== undefined ? Boolean(req.body.isActive) : !target.isActive;
+  if (!nextActive && target.role === 'Admin') {
+    const activeAdmins = db.users.filter(u => u.role === 'Admin' && u.isActive && u.id !== target.id).length;
+    if (activeAdmins === 0) return res.status(400).json({ error: 'At least one active Admin is required.' });
+  }
+
+  target.isActive = nextActive;
+  writeDb();
+  addAuditLog(admin.id, nextActive ? 'Activate User' : 'Deactivate User', undefined, target.fullName, `${nextActive ? 'Activated' : 'Deactivated'} ${target.fullName}.`);
+  res.json(target);
 });
 
 // Switch the active demo profile. This mints a server-side session and sets
@@ -784,6 +886,9 @@ app.post('/api/users/switch-profile', (req, res) => {
   const user = db.users.find(u => u.id === userId);
   if (!user) {
     return res.status(404).json({ error: 'User does not exist.' });
+  }
+  if (!user.isActive) {
+    return res.status(403).json({ error: 'This user profile is inactive.' });
   }
 
   const sid = genToken('sess');
