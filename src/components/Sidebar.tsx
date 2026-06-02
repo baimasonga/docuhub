@@ -85,7 +85,7 @@ export default function Sidebar({
             className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium text-xs flex items-center justify-center space-x-1.5 transition-all shadow-md shadow-indigo-100 hover:shadow-indigo-200"
           >
             <Plus className="w-4 h-4 text-white shrink-0" />
-            <span>Upload Document</span>
+            <span>Upload Files</span>
           </button>
           
           <button
@@ -93,7 +93,7 @@ export default function Sidebar({
             className="w-full py-2 px-4 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl font-medium text-xs flex items-center justify-center space-x-1.5 transition-all"
           >
             <Folder className="w-4 h-4 text-slate-500 shrink-0" />
-            <span>Create Cabinet</span>
+            <span>Create Cabinet / Folder</span>
           </button>
         </div>
       )}

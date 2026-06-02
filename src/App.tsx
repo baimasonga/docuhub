@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Folder, 
   FolderPlus, 
@@ -195,6 +195,10 @@ export default function App() {
   // Active inputs / fields state
   const [newCommentText, setNewCommentText] = useState('');
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const folderUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const quickFileUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const [bulkUploadStatus, setBulkUploadStatus] = useState<{ total: number; done: number } | null>(null);
+  const [bulkUploading, setBulkUploading] = useState(false);
   const [notification, setNotification] = useState<{ text: string; type: 'success' | 'info' | 'error' } | null>(null);
   
   // Upload wizard inputs
@@ -202,7 +206,7 @@ export default function App() {
   const [upDesc, setUpDesc] = useState('');
   const [upCategory, setUpCategory] = useState<Document['documentType']>('Other');
   const [upPresetIndex, setUpPresetIndex] = useState<number>(-1);
-  const [upCustomFile, setUpCustomFile] = useState<{ name: string; content: string; size: number } | null>(null);
+  const [upCustomFile, setUpCustomFile] = useState<{ name: string; content: string; size: number; type: string } | null>(null);
   const [upDept, setUpDept] = useState('');
   const [upAutoFile, setUpAutoFile] = useState(true);
 
@@ -503,7 +507,7 @@ export default function App() {
       filename = upCustomFile.name;
       filedata = upCustomFile.content; // text base64 or raw string
       size = upCustomFile.size;
-      type = upCustomFile.name.endsWith('.png') || upCustomFile.name.endsWith('.jpg') ? 'image/png' : 'text/plain';
+      type = upCustomFile.type;
     } else {
       triggerToast('Please choose a preset template or upload a custom file configuration.', 'error');
       return;
@@ -565,29 +569,156 @@ export default function App() {
     });
   };
 
+  const readFileAsBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const resultStr = reader.result as string;
+      resolve(resultStr.split(',')[1] || '');
+    };
+    reader.onerror = () => reject(reader.error || new Error('Could not read file.'));
+    reader.readAsDataURL(file);
+  });
+
+  const detectFileType = (file: File): string => {
+    if (file.type) return file.type;
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    const fallbackTypes: Record<string, string> = {
+      pdf: 'application/pdf',
+      doc: 'application/msword',
+      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      xls: 'application/vnd.ms-excel',
+      xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      csv: 'text/csv',
+      txt: 'text/plain',
+      png: 'image/png',
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      gif: 'image/gif',
+      zip: 'application/zip'
+    };
+    return (ext && fallbackTypes[ext]) || 'application/octet-stream';
+  };
+
+  const setSelectedUploadFile = async (file: File) => {
+    const base64Content = await readFileAsBase64(file);
+    setUpCustomFile({
+      name: file.name,
+      size: file.size,
+      type: detectFileType(file),
+      content: base64Content
+    });
+    setUpTitle(file.name.replace(/\.[^/.]+$/, ""));
+    setUpPresetIndex(-1);
+  };
+
   // Upload file custom handler
   const handleCustomFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      const resultStr = reader.result as string;
-      const base64Content = resultStr.split(',')[1] || btoa(resultStr);
-      setUpCustomFile({
-        name: file.name,
-        size: file.size,
-        content: base64Content
-      });
-      setUpTitle(file.name.replace(/\.[^/.]+$/, ""));
-      setUpPresetIndex(-1);
-    };
-    
-    // Read images as data URL base64, otherwise text readable
-    if (file.type.startsWith('image/')) {
-      reader.readAsDataURL(file);
-    } else {
-      reader.readAsText(file);
+    setSelectedUploadFile(file).catch(() => triggerToast('Could not read the selected file.', 'error'));
+  };
+
+  const handleQuickFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !currentUser) return;
+
+    setUpPresetIndex(-1);
+    setUpDesc('');
+    setUpCategory('Other');
+    setUpDept(currentUser.department);
+    setUpAutoFile(false);
+    setSelectedUploadFile(file)
+      .then(() => setShowUploadModal(true))
+      .catch(() => triggerToast('Could not read the selected file.', 'error'));
+  };
+
+  const createFolderRequest = async (name: string, parentFolderId: string | null, department: string): Promise<FolderType> => {
+    if (!currentUser) throw new Error('Not authenticated.');
+    const res = await fetch('/api/folders', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-id': currentUser.id
+      },
+      body: JSON.stringify({ name, parentFolderId, department })
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'Could not create folder.');
+    return data;
+  };
+
+  const uploadFileRequest = async (file: File, folderId: string | null) => {
+    if (!currentUser) throw new Error('Not authenticated.');
+    const fileData = await readFileAsBase64(file);
+    const title = file.name.replace(/\.[^/.]+$/, '') || file.name;
+    const res = await fetch('/api/documents/upload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-id': currentUser.id,
+        'x-user-role': currentUser.role,
+        'x-user-department': currentUser.department
+      },
+      body: JSON.stringify({
+        title,
+        description: `Uploaded from folder import: ${file.name}`,
+        folderId,
+        documentType: 'Other',
+        fileName: file.name,
+        fileSize: file.size,
+        fileType: detectFileType(file),
+        fileData,
+        department: currentUser.department,
+        autoFile: false
+      })
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `Could not upload ${file.name}.`);
+    return data;
+  };
+
+  const handleFolderUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(e.target.files ?? []) as File[];
+    e.target.value = '';
+    if (!selectedFiles.length || !currentUser) return;
+
+    setBulkUploading(true);
+    setBulkUploadStatus({ total: selectedFiles.length, done: 0 });
+
+    const knownFolders = new Map<string, FolderType>();
+    folders.forEach(f => knownFolders.set(`${f.parentFolderId || 'root'}::${f.name.toLowerCase()}`, f));
+
+    try {
+      for (const file of selectedFiles) {
+        const relativePath = ((file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name);
+        const pathParts = relativePath.split('/').filter(Boolean);
+        const folderParts = pathParts.slice(0, -1);
+        let parentId = currentFolderId;
+
+        for (const part of folderParts) {
+          const key = `${parentId || 'root'}::${part.toLowerCase()}`;
+          let folder = knownFolders.get(key);
+          if (!folder) {
+            folder = await createFolderRequest(part, parentId, currentUser.department);
+            knownFolders.set(key, folder);
+          }
+          parentId = folder.id;
+        }
+
+        await uploadFileRequest(file, parentId);
+        setBulkUploadStatus(prev => prev ? { ...prev, done: prev.done + 1 } : prev);
+      }
+
+      triggerToast(`Uploaded ${selectedFiles.length} file${selectedFiles.length === 1 ? '' : 's'} with folder structure preserved.`, 'success');
+      reloadData();
+    } catch (err: any) {
+      triggerToast(err?.message || 'Folder upload failed. Please try again.', 'error');
+      reloadData();
+    } finally {
+      setBulkUploading(false);
+      setBulkUploadStatus(null);
     }
   };
 
@@ -1085,7 +1216,7 @@ export default function App() {
             setUpCategory('Other');
             setUpCustomFile(null);
             setUpDept(currentUser.department);
-            setUpAutoFile(true);
+            setUpAutoFile(currentView !== 'my-drive');
             setShowUploadModal(true);
           }}
           onOpenCreateFolder={() => {
@@ -1368,8 +1499,55 @@ export default function App() {
                   )}
                 </div>
 
-                <div className="text-xs text-slate-400">
-                  <span>{documents.length} objects found</span>
+                <div className="flex items-center gap-2">
+                  {currentView === 'my-drive' && currentUser.role !== 'Viewer' && (
+                    <>
+                      <input
+                        ref={quickFileUploadInputRef}
+                        type="file"
+                        onChange={handleQuickFileSelect}
+                        className="hidden"
+                      />
+                      <input
+                        ref={folderUploadInputRef}
+                        type="file"
+                        multiple
+                        onChange={handleFolderUpload}
+                        className="hidden"
+                        {...({ webkitdirectory: '', directory: '' } as React.InputHTMLAttributes<HTMLInputElement>)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFolderName('');
+                          setFolderScopeDept(currentUser.department);
+                          setShowFolderModal(true);
+                        }}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-bold text-slate-600 hover:border-indigo-200 hover:text-indigo-700 hover:bg-indigo-50/40 transition-all"
+                      >
+                        <FolderPlus className="w-3.5 h-3.5" />
+                        <span>New Folder</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => quickFileUploadInputRef.current?.click()}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2 text-[11px] font-bold text-indigo-700 hover:bg-indigo-100 transition-all"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>Upload Files</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={bulkUploading}
+                        onClick={() => folderUploadInputRef.current?.click()}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3 py-2 text-[11px] font-bold text-white shadow-sm shadow-indigo-100 hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-indigo-300 transition-all"
+                      >
+                        {bulkUploading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <FolderPlus className="w-3.5 h-3.5" />}
+                        <span>{bulkUploadStatus ? `${bulkUploadStatus.done}/${bulkUploadStatus.total} Uploading` : 'Upload Folder'}</span>
+                      </button>
+                    </>
+                  )}
+                  <span className="text-xs text-slate-400 whitespace-nowrap">{documents.length} objects found</span>
                 </div>
               </div>
 
@@ -1411,7 +1589,40 @@ export default function App() {
                       <File className="w-6 h-6" />
                     </div>
                     <h3 className="font-display font-bold text-slate-800 text-sm">Target folder looks empty</h3>
-                    <p className="text-xs max-w-sm mt-1">There are no files registered in this specific directory mapping. Click 'Upload Document' to submit OCR items.</p>
+                    <p className="text-xs max-w-sm mt-1">Create a folder here, upload individual files, or import an entire local folder while preserving its structure.</p>
+                    {currentView === 'my-drive' && currentUser.role !== 'Viewer' && (
+                      <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFolderName('');
+                            setFolderScopeDept(currentUser.department);
+                            setShowFolderModal(true);
+                          }}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-bold text-slate-600 hover:border-indigo-200 hover:text-indigo-700"
+                        >
+                          <FolderPlus className="w-3.5 h-3.5" />
+                          New Folder
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => quickFileUploadInputRef.current?.click()}
+                          className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2 text-[11px] font-bold text-indigo-700 hover:bg-indigo-100"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                          Upload Files
+                        </button>
+                        <button
+                          type="button"
+                          disabled={bulkUploading}
+                          onClick={() => folderUploadInputRef.current?.click()}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3 py-2 text-[11px] font-bold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-indigo-300"
+                        >
+                          {bulkUploading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <FolderPlus className="w-3.5 h-3.5" />}
+                          {bulkUploadStatus ? `${bulkUploadStatus.done}/${bulkUploadStatus.total} Uploading` : 'Upload Folder'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
@@ -2085,7 +2296,7 @@ export default function App() {
             <div className="flex justify-between items-center pb-4 border-b border-slate-100 shrink-0">
               <div className="flex items-center space-x-2">
                 <Upload className="w-5 h-5 text-indigo-600 shrink-0" />
-                <h3 className="font-display font-extrabold text-slate-800">Upload and Process Scan</h3>
+                <h3 className="font-display font-extrabold text-slate-800">Upload Files to Cabinet</h3>
               </div>
               <button onClick={() => setShowUploadModal(false)} className="p-1 hover:bg-slate-100 rounded-lg">
                 <X className="w-4 h-4 text-slate-400" />
@@ -2241,7 +2452,7 @@ export default function App() {
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs">
           <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 mx-4">
             <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
-              <h3 className="font-display font-extrabold text-slate-800 text-sm">Create Cabinet</h3>
+              <h3 className="font-display font-extrabold text-slate-800 text-sm">Create Cabinet / Folder</h3>
               <button onClick={() => setShowFolderModal(false)} className="p-1 hover:bg-slate-100 rounded">
                 <X className="w-4 h-4 text-slate-400" />
               </button>
@@ -2275,7 +2486,7 @@ export default function App() {
                 type="submit"
                 className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-extrabold shadow-sm shadow-indigo-100 transition-all"
               >
-                Create Directory Folder
+                Create Folder
               </button>
             </form>
           </div>
