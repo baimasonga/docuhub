@@ -482,6 +482,38 @@ export default function App() {
     .catch(() => triggerToast('Could not create cabinet. Please try again.', 'error'));
   };
 
+  const handleDeleteFolder = (folder: FolderType, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!currentUser) return;
+
+    const childFolderCount = folders.filter(f => f.parentFolderId === folder.id).length;
+    const message = childFolderCount > 0
+      ? `Delete "${folder.name}" and its subfolders? Contained files will be moved to Trash.`
+      : `Delete "${folder.name}"? Contained files will be moved to Trash.`;
+    if (!window.confirm(message)) return;
+
+    fetch(`/api/folders/${folder.id}`, {
+      method: 'DELETE',
+      headers: { 'x-user-id': currentUser.id }
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          triggerToast(
+            data.trashedDocumentCount > 0
+              ? `Folder deleted. ${data.trashedDocumentCount} file(s) moved to Trash.`
+              : 'Folder deleted.',
+            'success'
+          );
+          if (currentFolderId === folder.id) setCurrentFolderId(folder.parentFolderId);
+          reloadData();
+        } else {
+          triggerToast(data.error || 'Could not delete folder.', 'error');
+        }
+      })
+      .catch(() => triggerToast('Could not delete folder.', 'error'));
+  };
+
   const scanUploadCandidate = async (candidate: { fileName: string; fileType: string; fileData: string; department?: string }) => {
     if (!currentUser) return;
     setUploadScanLoading(true);
@@ -1618,12 +1650,12 @@ export default function App() {
                         onClick={() => {
                           setCurrentFolderId(fold.id);
                         }}
-                        className="bg-white border border-slate-100 hover:border-indigo-100 hover:shadow-sm p-3.5 rounded-xl flex items-center space-x-3 cursor-pointer transition-all select-none group"
+                        className="relative bg-white border border-slate-100 hover:border-indigo-100 hover:shadow-sm p-3.5 rounded-xl flex items-center space-x-3 cursor-pointer transition-all select-none group"
                       >
                         <div className="w-8 h-8 rounded-lg bg-indigo-50/70 flex items-center justify-center text-indigo-600 group-hover:bg-indigo-100/70 transition-all">
                           <Folder className="w-4 h-4" />
                         </div>
-                        <div className="min-w-0">
+                        <div className="min-w-0 pr-6">
                           <h4 className="text-xs font-bold text-slate-700 truncate group-hover:text-indigo-600">{fold.name}</h4>
                           {fold.department && (
                             <span className="text-[8px] font-mono px-1 py-0.2 bg-slate-100 text-slate-500 rounded block mt-0.5 truncate uppercase">
@@ -1631,6 +1663,16 @@ export default function App() {
                             </span>
                           )}
                         </div>
+                        {currentUser.role !== 'Viewer' && (
+                          <button
+                            type="button"
+                            onClick={(e) => handleDeleteFolder(fold, e)}
+                            title="Delete folder"
+                            className="absolute right-2 top-2 rounded-md p-1 text-slate-300 opacity-0 transition-all hover:bg-rose-50 hover:text-rose-500 group-hover:opacity-100 focus:opacity-100"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
