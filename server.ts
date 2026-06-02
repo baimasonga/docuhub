@@ -1746,9 +1746,16 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`SmartDocs DMS Full-Stack Engine booting on port: ${PORT}`);
-    console.log(`Active workspace location: ${process.cwd()}`);
+  await new Promise<void>((resolve, reject) => {
+    const server = app.listen(PORT, '0.0.0.0', () => {
+      console.log(`[startup] SmartDocs DMS listening on port ${PORT} (0.0.0.0)`);
+      console.log(`[startup] Active workspace location: ${process.cwd()}`);
+      resolve();
+    });
+    server.on('error', (err) => {
+      console.error(`[fatal] Failed to bind to port ${PORT}:`, err);
+      reject(err);
+    });
   });
 }
 
