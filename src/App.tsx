@@ -1311,29 +1311,6 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Interactive system notifications and OCR highlights */}
-                <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm flex flex-col">
-                  <h3 className="font-display font-bold text-slate-800 text-sm mb-3.5 flex items-center">
-                    <Sparkles className="w-4 h-4 text-indigo-500 mr-1.5" />
-                    <span>Intelligent Tag Tracker</span>
-                  </h3>
-                  <p className="text-[11px] text-slate-400 mb-4 font-medium leading-relaxed">
-                    VaultDMS uses Gemini 2.5 Flash to read documents and configure smart category metadata. Browse automated tags across active collections:
-                  </p>
-                  
-                  <div className="flex flex-wrap gap-2">
-                    {Array.from(new Set(documents.flatMap(d => d.tags))).slice(0, 15).map(tag => (
-                      <button 
-                        key={tag}
-                        onClick={() => setSearchQuery(tag)} 
-                        className="px-2.5 py-1 bg-indigo-50/70 hover:bg-indigo-100 text-indigo-600 font-semibold rounded-lg text-[10px] border border-indigo-100/50 transition-all font-mono"
-                      >
-                        #{tag}
-                      </button>
-                    ))}
-                  </div>
-
-                </div>
 
               </div>
             </div>
@@ -2222,7 +2199,7 @@ export default function App() {
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs">
           <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 mx-4">
             <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
-              <h3 className="font-display font-extrabold text-slate-800 text-sm">Create Folder Directory</h3>
+              <h3 className="font-display font-extrabold text-slate-800 text-sm">Create Cabinet</h3>
               <button onClick={() => setShowFolderModal(false)} className="p-1 hover:bg-slate-100 rounded">
                 <X className="w-4 h-4 text-slate-400" />
               </button>
