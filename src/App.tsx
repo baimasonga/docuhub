@@ -43,7 +43,9 @@ import {
   Send,
   UserCheck,
   Calendar,
-  AlertTriangle
+  AlertTriangle,
+  Copy,
+  Pencil
 } from 'lucide-react';
 import { 
   User, 
@@ -208,6 +210,20 @@ export default function App() {
   const [decisionApprovalId, setDecisionApprovalId] = useState<string | null>(null);
   const [decisionComment, setDecisionComment] = useState('');
 
+  // Google-Drive-style multi-selection + per-row action menu.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  // Which documents a Move action applies to (single row or a bulk selection).
+  const [moveIds, setMoveIds] = useState<string[]>([]);
+
+  // Dropbox-style "Get link" modal state.
+  const [linkModalDocId, setLinkModalDocId] = useState<string | null>(null);
+  const [linkExpiry, setLinkExpiry] = useState<string>('7'); // days, or 'never'
+  const [linkPassword, setLinkPassword] = useState<string>('');
+  const [linkPermission, setLinkPermission] = useState<'Viewer' | 'Commenter'>('Viewer');
+  const [createdLink, setCreatedLink] = useState<ExternalShareLink | null>(null);
+  const [linkLoading, setLinkLoading] = useState(false);
+
   // Fetch Users & Initialize. Identity is carried by an HttpOnly cookie. On
   // mount we first restore any existing session (so a refresh or new tab keeps
   // the current profile), and only fall back to a default profile if none.
@@ -309,6 +325,12 @@ export default function App() {
   useEffect(() => {
     reloadData();
   }, [currentUser, currentView, currentFolderId, searchQuery, categoryFilter, selectedDocId]);
+
+  // Reset selection + any open row menu when navigating between views/folders.
+  useEffect(() => {
+    setSelectedIds(new Set());
+    setOpenMenuId(null);
+  }, [currentView, currentFolderId]);
 
   // Load the institution profile once authenticated (drives auto-filing UI).
   useEffect(() => {
@@ -615,38 +637,141 @@ export default function App() {
     });
   };
 
-  // Move document modal triggers
-  const openMoveModal = (docId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setSelectedDocId(docId);
+  // Move document modal triggers. Works for a single row or a bulk selection.
+  const openMoveModal = (docIds: string[], e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setMoveIds(docIds);
     setMoveTargetFolderId('root');
     setShowMoveModal(true);
   };
 
   const handleMoveDocument = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUser || !selectedDocId) return;
+    if (!currentUser || moveIds.length === 0) return;
 
-    fetch(`/api/documents/${selectedDocId}/move`, {
+    const folderId = moveTargetFolderId === 'root' ? null : moveTargetFolderId;
+    Promise.all(
+      moveIds.map(id =>
+        fetch(`/api/documents/${id}/move`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folderId })
+        }).then(res => res.json())
+      )
+    ).then(results => {
+      const firstError = results.find(r => r.error);
+      if (firstError) {
+        triggerToast(firstError.error, 'error');
+      } else {
+        triggerToast(moveIds.length > 1 ? `Moved ${moveIds.length} documents.` : 'Document layout paths updated cleanly!', 'success');
+      }
+      setShowMoveModal(false);
+      clearSelection();
+      reloadData();
+    });
+  };
+
+  // ---- Google-Drive-style selection + file actions ----
+  const clearSelection = () => { setSelectedIds(new Set()); setOpenMenuId(null); };
+
+  const toggleSelect = (id: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const allVisibleSelected = documents.length > 0 && documents.every(d => selectedIds.has(d.id));
+  const toggleSelectAll = () => {
+    setSelectedIds(allVisibleSelected ? new Set() : new Set(documents.map(d => d.id)));
+  };
+
+  const handleDownload = (id: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    window.open(`/api/documents/${id}/download`, '_blank');
+  };
+
+  const handleMakeCopy = (id: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    fetch(`/api/documents/${id}/copy`, { method: 'POST' })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) { triggerToast(`Created "${data.document.title}".`, 'success'); reloadData(); }
+        else triggerToast(data.error || 'Could not copy document.', 'error');
+      });
+  };
+
+  const handleRename = (id: string, currentTitle: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const title = window.prompt('Rename document', currentTitle);
+    if (title == null) return;
+    if (!title.trim() || title.trim() === currentTitle) return;
+    fetch(`/api/documents/${id}/rename`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser.id
-      },
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: title.trim() })
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) { triggerToast('Document renamed.', 'success'); reloadData(); if (selectedDocId === id) fetchDocDetail(id); }
+        else triggerToast(data.error || 'Rename failed.', 'error');
+      });
+  };
+
+  // Bulk actions over the current selection.
+  const runBulk = (fn: (id: string) => Promise<unknown>, doneMsg: string) => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    Promise.all(ids.map(fn)).then(() => { triggerToast(doneMsg, 'success'); clearSelection(); reloadData(); });
+  };
+  const handleBulkDownload = () => { Array.from(selectedIds).forEach(id => window.open(`/api/documents/${id}/download`, '_blank')); };
+  const handleBulkStar = () => runBulk(id => fetch(`/api/documents/${id}/star`, { method: 'POST' }), 'Updated starred files.');
+  const handleBulkDelete = () => runBulk(id => fetch(`/api/documents/${id}/delete`, { method: 'POST' }), 'Moved selection to Trash.');
+  const handleBulkRestore = () => runBulk(id => fetch(`/api/documents/${id}/restore`, { method: 'POST' }), 'Restored selection from Trash.');
+  const handleBulkPurge = () => {
+    if (!window.confirm(`Permanently delete ${selectedIds.size} item(s)? This cannot be undone.`)) return;
+    runBulk(id => fetch(`/api/documents/${id}/permanently-delete`, { method: 'POST' }), 'Permanently purged selection.');
+  };
+
+  // ---- Dropbox-style "Get link" modal ----
+  const openLinkModal = (docId: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setOpenMenuId(null);
+    setLinkModalDocId(docId);
+    setLinkExpiry('7');
+    setLinkPassword('');
+    setLinkPermission('Viewer');
+    setCreatedLink(null);
+  };
+
+  const handleCreateShareLink = () => {
+    if (!linkModalDocId) return;
+    setLinkLoading(true);
+    fetch(`/api/documents/${linkModalDocId}/external-link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        folderId: moveTargetFolderId === 'root' ? null : moveTargetFolderId
+        expiresInDays: linkExpiry === 'never' ? null : Number(linkExpiry),
+        password: linkPassword.trim() || undefined,
+        permissionType: linkPermission
       })
     })
-    .then(res => res.json())
-    .then(data => {
-      if (data.error) {
-        triggerToast(data.error, 'error');
-      } else {
-        triggerToast('Document layout paths updated cleanly!', 'success');
-        setShowMoveModal(false);
-        reloadData();
-      }
-    });
+      .then(res => res.json())
+      .then(data => {
+        setLinkLoading(false);
+        if (data.success) { setCreatedLink(data.link); triggerToast('Share link ready.', 'success'); }
+        else triggerToast(data.error || 'Could not create link.', 'error');
+      })
+      .catch(() => { setLinkLoading(false); triggerToast('Could not create link.', 'error'); });
+  };
+
+  const shortLinkUrl = (code?: string) => `${window.location.origin}/s/${code || ''}`;
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard?.writeText(text)
+      .then(() => triggerToast('Link copied to clipboard.', 'success'))
+      .catch(() => triggerToast('Copy failed — select and copy manually.', 'info'));
   };
 
   // Soft delete (Trash bin)
@@ -1311,7 +1436,16 @@ export default function App() {
                     <table className="w-full text-left text-xs">
                       <thead className="bg-slate-50/70 border-b border-indigo-50/50">
                         <tr className="text-[10px] font-mono font-bold uppercase text-slate-400">
-                          <th className="py-3 px-4 w-10"></th>
+                          <th className="py-3 pl-4 pr-1 w-8">
+                            <input
+                              type="checkbox"
+                              checked={allVisibleSelected}
+                              onChange={toggleSelectAll}
+                              title="Select all"
+                              className="w-3.5 h-3.5 rounded border-slate-300 text-indigo-600 cursor-pointer accent-indigo-600"
+                            />
+                          </th>
+                          <th className="py-3 px-2 w-8"></th>
                           <th className="py-3 px-4">Document Details</th>
                           <th className="py-3 px-4">Department Scope</th>
                           <th className="py-3 px-4">Tags & Classifications</th>
@@ -1323,12 +1457,20 @@ export default function App() {
                         {documents.map(doc => {
                           const isDocStarred = doc.isStarred;
                           return (
-                            <tr 
+                            <tr
                               key={doc.id}
                               onClick={() => setSelectedDocId(doc.id)}
-                              className={`hover:bg-slate-50/80 cursor-pointer transition-colors ${selectedDocId === doc.id ? 'bg-indigo-50/20' : ''}`}
+                              className={`hover:bg-slate-50/80 cursor-pointer transition-colors ${selectedIds.has(doc.id) ? 'bg-indigo-50/60' : selectedDocId === doc.id ? 'bg-indigo-50/20' : ''}`}
                             >
-                              <td className="py-3 px-4" onClick={(e) => e.stopPropagation()}>
+                              <td className="py-3 pl-4 pr-1" onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  type="checkbox"
+                                  checked={selectedIds.has(doc.id)}
+                                  onChange={() => toggleSelect(doc.id)}
+                                  className="w-3.5 h-3.5 rounded border-slate-300 text-indigo-600 cursor-pointer accent-indigo-600"
+                                />
+                              </td>
+                              <td className="py-3 px-2" onClick={(e) => e.stopPropagation()}>
                                 <button onClick={(e) => handleToggleStar(doc.id, e)} className="text-slate-300 hover:text-amber-500 transition-colors">
                                   <Star className={`w-4 h-4 ${isDocStarred ? 'text-amber-500 fill-amber-400' : ''}`} />
                                 </button>
@@ -1368,7 +1510,7 @@ export default function App() {
                                 </span>
                               </td>
                               <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
-                                <div className="flex items-center justify-end space-x-1">
+                                <div className="relative flex items-center justify-end space-x-1">
                                   {currentView === 'trash' ? (
                                     <>
                                       <button 
@@ -1391,7 +1533,7 @@ export default function App() {
                                     <>
                                       {currentUser.role !== 'Viewer' && (
                                         <button 
-                                          onClick={(e) => openMoveModal(doc.id, e)}
+                                          onClick={(e) => openMoveModal([doc.id], e)}
                                           title="Move folder location"
                                           className="p-1 text-slate-400 hover:text-indigo-650 rounded hover:bg-slate-100"
                                         >
@@ -1412,6 +1554,53 @@ export default function App() {
                                       >
                                         <Trash2 className="w-3.5 h-3.5" />
                                       </button>
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === doc.id ? null : doc.id); }}
+                                        title="More actions"
+                                        className="p-1 text-slate-400 hover:text-indigo-650 rounded hover:bg-slate-100"
+                                      >
+                                        <MoreVertical className="w-3.5 h-3.5" />
+                                      </button>
+                                      {openMenuId === doc.id && (
+                                        <>
+                                          <div className="fixed inset-0 z-30" onClick={(e) => { e.stopPropagation(); setOpenMenuId(null); }} />
+                                          <div className="absolute right-0 top-8 z-40 w-48 bg-white rounded-xl shadow-2xl border border-slate-100 py-1 text-left text-[11px] font-semibold text-slate-600">
+                                            <button onClick={(e) => { e.stopPropagation(); setOpenMenuId(null); setSelectedDocId(doc.id); }} className="w-full px-3 py-2 flex items-center space-x-2.5 hover:bg-slate-50">
+                                              <Eye className="w-3.5 h-3.5 text-slate-400" /><span>Open</span>
+                                            </button>
+                                            <button onClick={(e) => { handleDownload(doc.id, e); setOpenMenuId(null); }} className="w-full px-3 py-2 flex items-center space-x-2.5 hover:bg-slate-50">
+                                              <Download className="w-3.5 h-3.5 text-slate-400" /><span>Download</span>
+                                            </button>
+                                            <button onClick={(e) => { handleMakeCopy(doc.id, e); setOpenMenuId(null); }} className="w-full px-3 py-2 flex items-center space-x-2.5 hover:bg-slate-50">
+                                              <Copy className="w-3.5 h-3.5 text-slate-400" /><span>Make a copy</span>
+                                            </button>
+                                            {currentUser.role !== 'Viewer' && (
+                                              <button onClick={(e) => { handleRename(doc.id, doc.title, e); setOpenMenuId(null); }} className="w-full px-3 py-2 flex items-center space-x-2.5 hover:bg-slate-50">
+                                                <Pencil className="w-3.5 h-3.5 text-slate-400" /><span>Rename</span>
+                                              </button>
+                                            )}
+                                            {currentUser.role !== 'Viewer' && (
+                                              <button onClick={(e) => { setOpenMenuId(null); openMoveModal([doc.id], e); }} className="w-full px-3 py-2 flex items-center space-x-2.5 hover:bg-slate-50">
+                                                <CornerDownRight className="w-3.5 h-3.5 text-slate-400" /><span>Move to…</span>
+                                              </button>
+                                            )}
+                                            <button onClick={(e) => { setOpenMenuId(null); openLinkModal(doc.id, e); }} className="w-full px-3 py-2 flex items-center space-x-2.5 hover:bg-slate-50">
+                                              <Link2 className="w-3.5 h-3.5 text-slate-400" /><span>Get link</span>
+                                            </button>
+                                            <button onClick={(e) => { setOpenMenuId(null); openShareModal(doc.id, e); }} className="w-full px-3 py-2 flex items-center space-x-2.5 hover:bg-slate-50">
+                                              <Share2 className="w-3.5 h-3.5 text-slate-400" /><span>Share with people</span>
+                                            </button>
+                                            <button onClick={(e) => { handleToggleStar(doc.id, e); setOpenMenuId(null); }} className="w-full px-3 py-2 flex items-center space-x-2.5 hover:bg-slate-50">
+                                              <Star className={`w-3.5 h-3.5 ${isDocStarred ? 'text-amber-500 fill-amber-400' : 'text-slate-400'}`} /><span>{isDocStarred ? 'Remove star' : 'Add star'}</span>
+                                            </button>
+                                            {currentUser.role !== 'Viewer' && (
+                                              <button onClick={(e) => { handleDeleteDocument(doc.id, e); setOpenMenuId(null); }} className="w-full px-3 py-2 flex items-center space-x-2.5 text-rose-500 hover:bg-rose-50 border-t border-slate-100 mt-1 pt-2">
+                                                <Trash2 className="w-3.5 h-3.5" /><span>Move to trash</span>
+                                              </button>
+                                            )}
+                                          </div>
+                                        </>
+                                      )}
                                     </>
                                   )}
                                 </div>
@@ -2239,6 +2428,113 @@ export default function App() {
                 <span>Create Share Link</span>
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* FLOATING SELECTION TOOLBAR (Google-Drive style bulk actions) */}
+      {selectedIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center space-x-1 bg-slate-900 text-white rounded-2xl shadow-2xl px-3 py-2 text-xs">
+          <button onClick={clearSelection} title="Clear selection" className="p-1.5 hover:bg-white/10 rounded-lg">
+            <X className="w-4 h-4" />
+          </button>
+          <span className="font-bold px-2 whitespace-nowrap">{selectedIds.size} selected</span>
+          <span className="w-px h-5 bg-white/15 mx-1" />
+          {currentView === 'trash' ? (
+            <>
+              <button onClick={handleBulkRestore} className="px-3 py-1.5 hover:bg-white/10 rounded-lg flex items-center space-x-1.5 font-semibold">
+                <X className="w-3.5 h-3.5 rotate-45" /><span>Restore</span>
+              </button>
+              <button onClick={handleBulkPurge} className="px-3 py-1.5 hover:bg-rose-500/30 text-rose-300 rounded-lg flex items-center space-x-1.5 font-semibold">
+                <Trash2 className="w-3.5 h-3.5" /><span>Delete forever</span>
+              </button>
+            </>
+          ) : (
+            <>
+              <button onClick={handleBulkDownload} title="Download" className="p-2 hover:bg-white/10 rounded-lg"><Download className="w-4 h-4" /></button>
+              <button onClick={handleBulkStar} title="Star / unstar" className="p-2 hover:bg-white/10 rounded-lg"><Star className="w-4 h-4" /></button>
+              {currentUser && currentUser.role !== 'Viewer' && (
+                <button onClick={() => openMoveModal(Array.from(selectedIds))} title="Move to folder" className="p-2 hover:bg-white/10 rounded-lg"><CornerDownRight className="w-4 h-4" /></button>
+              )}
+              {selectedIds.size === 1 && (
+                <button onClick={() => openLinkModal(Array.from(selectedIds)[0] as string)} title="Get link" className="p-2 hover:bg-white/10 rounded-lg"><Link2 className="w-4 h-4" /></button>
+              )}
+              {currentUser && currentUser.role !== 'Viewer' && (
+                <button onClick={handleBulkDelete} title="Move to trash" className="p-2 hover:bg-rose-500/30 text-rose-300 rounded-lg"><Trash2 className="w-4 h-4" /></button>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* MODAL: GET LINK (Dropbox-style shareable link with expiry + password) */}
+      {linkModalDocId && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs" onClick={() => setLinkModalDocId(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 mx-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
+              <h3 className="font-display font-extrabold text-slate-800 text-sm flex items-center space-x-2">
+                <Link2 className="w-4 h-4 text-indigo-600" /><span>Get shareable link</span>
+              </h3>
+              <button onClick={() => setLinkModalDocId(null)} className="p-1 hover:bg-slate-100 rounded">
+                <X className="w-4 h-4 text-slate-400" />
+              </button>
+            </div>
+
+            {!createdLink ? (
+              <div className="space-y-4 text-xs font-medium text-slate-600">
+                <p className="text-[11px] text-slate-500">Anyone with the link can open this document. Tune the access below.</p>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Link expires</label>
+                  <select value={linkExpiry} onChange={(e) => setLinkExpiry(e.target.value)} className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none">
+                    <option value="1">In 24 hours</option>
+                    <option value="7">In 7 days</option>
+                    <option value="30">In 30 days</option>
+                    <option value="never">Never</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Permission</label>
+                  <select value={linkPermission} onChange={(e) => setLinkPermission(e.target.value as 'Viewer' | 'Commenter')} className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none">
+                    <option value="Viewer">Can view</option>
+                    <option value="Commenter">Can comment</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase flex items-center space-x-1"><Lock className="w-3 h-3" /><span>Password (optional)</span></label>
+                  <input type="text" value={linkPassword} onChange={(e) => setLinkPassword(e.target.value)} placeholder="Leave blank for no password" className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none" />
+                </div>
+
+                <button onClick={handleCreateShareLink} disabled={linkLoading} className="w-full py-2 bg-indigo-650 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-extrabold flex items-center justify-center space-x-2">
+                  {linkLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Link2 className="w-3.5 h-3.5" />}
+                  <span>{linkLoading ? 'Creating…' : 'Create link'}</span>
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4 text-xs font-medium text-slate-600">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Your short link</label>
+                  <div className="flex items-center space-x-2">
+                    <input readOnly value={shortLinkUrl(createdLink.shortCode)} className="flex-1 bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none font-mono" onFocus={(e) => e.target.select()} />
+                    <button onClick={() => copyToClipboard(shortLinkUrl(createdLink.shortCode))} className="px-3 py-2 bg-indigo-650 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5">
+                      <Copy className="w-3.5 h-3.5" /><span>Copy</span>
+                    </button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2 text-[10px] font-mono">
+                  <span className="px-2 py-1 bg-slate-100 rounded-md text-slate-600">{createdLink.permissionType === 'Commenter' ? 'CAN COMMENT' : 'VIEW ONLY'}</span>
+                  {createdLink.hasPassword && <span className="px-2 py-1 bg-amber-50 text-amber-700 rounded-md flex items-center space-x-1"><Lock className="w-3 h-3" /><span>PASSWORD</span></span>}
+                  <span className="px-2 py-1 bg-slate-100 rounded-md text-slate-600">{new Date(createdLink.expiresAt).getFullYear() > 2900 ? 'NO EXPIRY' : `EXPIRES ${new Date(createdLink.expiresAt).toLocaleDateString()}`}</span>
+                  <span className="px-2 py-1 bg-emerald-50 text-emerald-700 rounded-md flex items-center space-x-1"><Eye className="w-3 h-3" /><span>VIEWED {createdLink.accessCount}×</span></span>
+                </div>
+                <div className="flex items-center justify-between pt-1">
+                  <button onClick={() => setCreatedLink(null)} className="text-[11px] font-bold text-indigo-600 hover:underline">Create another</button>
+                  <button onClick={() => setLinkModalDocId(null)} className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg text-[11px] font-bold">Done</button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

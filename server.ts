@@ -375,6 +375,22 @@ function genToken(prefix = 's'): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
 }
 
+// Short, human-shareable code for /s/<code> links. Retries on the (unlikely)
+// chance of a collision so codes stay unique.
+function genShortCode(): string {
+  const alphabet = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 7; i++) code += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return db.externalLinks.some(l => l.shortCode === code) ? genShortCode() : code;
+}
+
+// Strip the server-only password from a share link before returning it to a
+// client, exposing only whether a password is set.
+function publicLink(l: ExternalShareLink) {
+  const { password, passwordHash, ...rest } = l;
+  return { ...rest, hasPassword: Boolean(passwordHash || password) };
+}
+
 function parseCookies(req: express.Request): Record<string, string> {
   const header = req.headers.cookie;
   if (!header) return {};
@@ -1046,7 +1062,7 @@ app.get('/api/documents/:id', (req, res) => {
     comments,
     approvals,
     permissions,
-    externalLinks: links
+    externalLinks: links.map(publicLink)
   });
 });
 
@@ -1559,37 +1575,40 @@ app.post('/api/documents/:id/external-link', (req, res) => {
     return res.status(403).json({ error: 'You do not have permission to create a share link for this document.' });
   }
 
-  const {
-    message,
-    allowDownload = true,
-    requiresPassword = false,
-    password,
-    maxDownloads,
-    expiresInDays = 7,
-  } = req.body as {
-    message?: string;
-    allowDownload?: boolean;
-    requiresPassword?: boolean;
-    password?: string;
-    maxDownloads?: number | null;
-    expiresInDays?: number;
-  };
+  // Link options: WeTransfer-style metadata (optional message, download limit,
+  // password) combined with Dropbox-style expiry and view/comment permission.
+  const { message, allowDownload, requiresPassword, password, maxDownloads, expiresInDays, permissionType } = req.body || {};
 
-  // Get file metadata from the latest version
+  // expiresInDays: positive number of days, or null for a non-expiring link.
+  let expiresAt: string;
+  if (expiresInDays === null) {
+    expiresAt = new Date('2999-12-31T00:00:00Z').toISOString();
+  } else {
+    const days = typeof expiresInDays === 'number' && expiresInDays > 0 ? Math.min(expiresInDays, 365) : 7;
+    expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+  }
+
+  const perm: ExternalShareLink['permissionType'] = permissionType === 'Commenter' ? 'Commenter' : 'Viewer';
+  const pwPlain = typeof password === 'string' && password.trim() ? password.trim() : undefined;
+  const passwordHash = (requiresPassword || pwPlain) && pwPlain
+    ? crypto.createHash('sha256').update(pwPlain).digest('hex')
+    : undefined;
+
+  // File metadata from the latest version (powers the share landing page).
   const latest = db.versions
     .filter(v => v.documentId === docId)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
 
-  // Token creation
   const token = `ext-${Math.random().toString(36).substring(2)}${Math.random().toString(36).substring(2)}`;
-  
+
   const extLink: ExternalShareLink = {
     id: `ext-link-${Date.now()}`,
     documentId: docId,
     token,
+    shortCode: genShortCode(),
     createdBy: userId,
-    permissionType: 'Viewer',
-    expiresAt: new Date(Date.now() + (expiresInDays || 7) * 24 * 60 * 60 * 1000).toISOString(),
+    permissionType: perm,
+    expiresAt,
     isActive: true,
     accessCount: 0,
     createdAt: new Date().toISOString(),
@@ -1597,22 +1616,18 @@ app.post('/api/documents/:id/external-link', (req, res) => {
     fileSize: latest?.fileSize || 0,
     fileType: latest?.fileType || 'unknown',
     downloadCount: 0,
-    maxDownloads: maxDownloads || null,
+    maxDownloads: maxDownloads ?? null,
     message: message || undefined,
     allowDownload: allowDownload !== false,
-    requiresPassword: requiresPassword === true,
-    passwordHash: (requiresPassword && password)
-      ? crypto.createHash('sha256').update(password).digest('hex')
-      : undefined,
+    requiresPassword: Boolean(passwordHash),
+    passwordHash,
   };
 
   db.externalLinks.push(extLink);
   writeDb();
 
-  // Strip passwordHash before sending to client
-  const { passwordHash: _ph, ...safeLink } = extLink;
-  addAuditLog(userId, 'Create Secure Link', docId, doc.title, `Generated WeTransfer-style secure share link: ${token}`);
-  res.json({ success: true, link: safeLink });
+  addAuditLog(userId, 'Create Secure Link', docId, doc.title, `Generated a ${passwordHash ? 'password-protected ' : ''}share link (/s/${extLink.shortCode}).`);
+  res.json({ success: true, link: publicLink(extLink) });
 });
 
 // Revoke external sharing link
@@ -1748,9 +1763,29 @@ app.get('/api/share/:token', (req, res) => {
 
 // Public access to a document via a secure external share link token.
 // Validates active state and expiry, increments the access counter, and
-// serves the latest version (attachment if allowDownload, inline otherwise).
-app.get('/api/external/:token', (req, res) => {
-  const link = db.externalLinks.find(l => l.token === req.params.token);
+// serves the latest version inline.
+// Minimal password gate served when a protected link is opened without (or with
+// a wrong) password. Submits the password back as a ?pw= query on the same path.
+function passwordGateHtml(actionPath: string, wrong: boolean): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Protected document</title>
+<style>body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
+.card{background:#1e293b;padding:2rem;border-radius:16px;max-width:340px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,.4)}
+h1{font-size:1.1rem;margin:0 0 .25rem}p{color:#94a3b8;font-size:.85rem;margin:0 0 1.25rem}
+input{width:100%;box-sizing:border-box;padding:.65rem .8rem;border-radius:9px;border:1px solid #334155;background:#0f172a;color:#fff;font-size:.95rem}
+button{width:100%;margin-top:.8rem;padding:.65rem;border:0;border-radius:9px;background:#6366f1;color:#fff;font-weight:600;font-size:.95rem;cursor:pointer}
+.err{color:#fb7185;font-size:.8rem;margin-top:.6rem}</style></head>
+<body><form class="card" method="GET" action="${actionPath}">
+<h1>🔒 This document is protected</h1><p>Enter the password to view it.</p>
+<input type="password" name="pw" placeholder="Password" autofocus required>
+<button type="submit">Unlock</button>
+${wrong ? '<div class="err">Incorrect password. Try again.</div>' : ''}
+</form></body></html>`;
+}
+
+// Validate a share link (active, not expired, password) and stream the latest
+// version inline. Shared by the long token route and the short /s/<code> route.
+function serveSharedLink(req: express.Request, res: express.Response, link?: ExternalShareLink) {
   if (!link) return res.status(404).send('This share link is invalid.');
   if (!link.isActive) return res.status(403).send('This share link has been revoked.');
   if (new Date(link.expiresAt).getTime() < Date.now()) {
@@ -1760,15 +1795,15 @@ app.get('/api/external/:token', (req, res) => {
     return res.status(410).send('This share link has reached its download limit.');
   }
 
-  // Password check
+  // Password gate: accepts ?pw= (from the HTML unlock form) or ?password= (API
+  // style), checked against the stored sha256 hash. Serves a friendly page.
   if (link.requiresPassword && link.passwordHash) {
-    const provided = req.query.password as string | undefined;
-    if (!provided) {
-      return res.status(401).send('This share link is password-protected. Add ?password=<pass> to the URL.');
-    }
-    const hash = crypto.createHash('sha256').update(provided).digest('hex');
-    if (hash !== link.passwordHash) {
-      return res.status(403).send('Incorrect password for this share link.');
+    const provided = (typeof req.query.pw === 'string' && req.query.pw)
+      || (typeof req.query.password === 'string' ? req.query.password : '');
+    const ok = !!provided && crypto.createHash('sha256').update(provided).digest('hex') === link.passwordHash;
+    if (!ok) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.status(provided ? 401 : 200).send(passwordGateHtml(req.path, Boolean(provided)));
     }
   }
 
@@ -1780,7 +1815,7 @@ app.get('/api/external/:token', (req, res) => {
     link.downloadCount = (link.downloadCount || 0) + 1;
   }
   writeDb();
-  addAuditLog(link.createdBy, 'External Access', doc.id, doc.title, `Document opened via external secure link (view #${link.accessCount}).`);
+  addAuditLog(link.createdBy, 'External Access', doc.id, doc.title, `Document opened via share link (view #${link.accessCount}).`);
 
   const latest = db.versions
     .filter(v => v.documentId === doc.id)
@@ -1796,6 +1831,94 @@ app.get('/api/external/:token', (req, res) => {
   const disposition = link.allowDownload !== false ? 'attachment' : 'inline';
   res.setHeader('Content-Disposition', `${disposition}; filename="${latest.fileName}"`);
   return res.send(buffer);
+}
+
+app.get('/api/external/:token', (req, res) => {
+  serveSharedLink(req, res, db.externalLinks.find(l => l.token === req.params.token));
+});
+
+// Short shareable link. Registered as a normal route (before the SPA fallback,
+// which is added later in startServer), so /s/<code> resolves to a document.
+app.get('/s/:code', (req, res) => {
+  serveSharedLink(req, res, db.externalLinks.find(l => l.shortCode === req.params.code));
+});
+
+// Download the latest version of a document as an attachment (authenticated).
+app.get('/api/documents/:id/download', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const doc = db.documents.find(d => d.id === req.params.id);
+  if (!doc) return res.status(404).json({ error: 'Document not found.' });
+  if (!canViewDocument(user, doc)) {
+    return res.status(403).json({ error: 'You do not have access to this document.' });
+  }
+
+  const latest = db.versions
+    .filter(v => v.documentId === doc.id)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+
+  addAuditLog(user.id, 'Download', doc.id, doc.title, `Downloaded ${latest ? latest.versionNumber : 'document'}.`);
+
+  if (!latest || !latest.fileData) {
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${doc.title}.txt"`);
+    return res.send(doc.ocrText || 'No content available for this document.');
+  }
+
+  const buffer = storedFileToBuffer(latest.fileData);
+  res.setHeader('Content-Type', mimeForType(latest.fileType));
+  res.setHeader('Content-Disposition', `attachment; filename="${latest.fileName}"`);
+  return res.send(buffer);
+});
+
+// Make a copy of a document (Google Drive style). Duplicates the document and
+// its latest version as a fresh Draft owned by the current user.
+app.post('/api/documents/:id/copy', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const doc = db.documents.find(d => d.id === req.params.id);
+  if (!doc) return res.status(404).json({ error: 'Document not found.' });
+  if (!canViewDocument(user, doc)) {
+    return res.status(403).json({ error: 'You do not have access to this document.' });
+  }
+
+  const now = new Date().toISOString();
+  const newId = `doc-${Date.now()}`;
+  const copy: Document = {
+    ...doc,
+    id: newId,
+    title: `Copy of ${doc.title}`,
+    ownerId: user.id,
+    ownerName: user.fullName,
+    status: 'Draft',
+    confidentialityLevel: 'Normal File',
+    currentVersion: 'v1',
+    isStarred: false,
+    isArchived: false,
+    isDeleted: false,
+    createdAt: now,
+    updatedAt: now
+  };
+  db.documents.push(copy);
+
+  const latest = db.versions
+    .filter(v => v.documentId === doc.id)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+  if (latest) {
+    db.versions.push({
+      ...latest,
+      id: `ver-${Date.now()}`,
+      documentId: newId,
+      versionNumber: 'v1',
+      uploadedBy: user.id,
+      uploadedByName: user.fullName,
+      createdAt: now
+    });
+  }
+
+  writeDb();
+  addAuditLog(user.id, 'Copy', newId, copy.title, `Made a copy of "${doc.title}".`);
+  res.status(201).json({ success: true, document: copy });
 });
 
 // Initialize Vite (dev) or static serving (production) and start listening.

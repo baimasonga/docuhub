@@ -134,11 +134,15 @@ export interface ExternalShareLink {
   id: string;
   documentId: string;
   token: string;
+  shortCode?: string;       // short, shareable code served at /s/<code>
   createdBy: string;
   permissionType: 'Viewer' | 'Commenter';
   expiresAt: string;
   isActive: boolean;
   accessCount: number;
+  password?: string;        // server-only; never returned to clients
+  hasPassword?: boolean;    // client-facing flag (whether a password is set)
+  label?: string;
   createdAt: string;
   // WeTransfer-style sharing fields
   fileName: string;
