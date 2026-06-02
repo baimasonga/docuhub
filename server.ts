@@ -31,6 +31,11 @@ const app = express();
 // Railway (and most PaaS) inject the port to bind via the PORT env var.
 const PORT = Number(process.env.PORT) || 3000;
 
+// Module-scoped server reference — keeps the net.Server handle alive for the
+// full process lifetime so it is never garbage-collected after startServer()
+// resolves, and gives signal handlers a reference for graceful shutdown.
+let server: ReturnType<typeof app.listen> | null = null;
+
 // Body parser
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
@@ -1766,17 +1771,22 @@ async function startServer() {
     }
   });
 
+  // Assign to the module-scoped variable so the handle is retained for the
+  // entire process lifetime — preventing GC from releasing the socket after
+  // startServer() resolves — and so signal handlers can close it cleanly.
   await new Promise<void>((resolve, reject) => {
-    const server = app.listen(PORT, '0.0.0.0', () => {
+    server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`[startup] SmartDocs DMS listening on port ${PORT} (0.0.0.0)`);
       console.log(`[startup] Active workspace location: ${process.cwd()}`);
       resolve();
     });
-    server.on('error', (err) => {
+    server.on('error', (err: NodeJS.ErrnoException) => {
       console.error(`[fatal] Failed to bind to port ${PORT}:`, err);
       reject(err);
     });
   });
+
+  console.log('[startup] Server is ready and accepting connections.');
 }
 
 // Only treat truly unexpected synchronous crashes as fatal. Background async
@@ -1794,6 +1804,29 @@ process.on('unhandledRejection', (reason) => {
   // operation (like a Supabase write) should not bring down a healthy server.
   console.error('[warn] unhandledRejection (non-fatal):', reason);
 });
+
+// Graceful shutdown: stop accepting new connections and let in-flight requests
+// drain before the process exits. This prevents Railway's SIGTERM (sent during
+// redeploys) from hard-killing the process mid-request, and also ensures the
+// module-scoped `server` reference is explicitly closed rather than abandoned.
+function shutdown(signal: string) {
+  console.log(`[shutdown] Received ${signal}; closing server gracefully.`);
+  if (server) {
+    server.close(() => {
+      console.log('[shutdown] All connections closed. Exiting.');
+      process.exit(0);
+    });
+    // Force-exit after 10 s if connections don't drain on their own.
+    setTimeout(() => {
+      console.error('[shutdown] Graceful shutdown timed out. Force-exiting.');
+      process.exit(1);
+    }, 10_000).unref();
+  } else {
+    process.exit(0);
+  }
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 // Spark up
 startServer().catch((err) => {
