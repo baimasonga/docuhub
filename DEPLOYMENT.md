@@ -1,6 +1,6 @@
-# Deploying DocuHub to Railway
+# Deploying VaultDMS to Railway
 
-DocuHub is a single long-running Express server that builds and serves a React
+VaultDMS is a single long-running Express server that builds and serves a React
 SPA. It persists its datastore to **Supabase** (durable, no disk required) when
 configured, and falls back to a local JSON file otherwise.
 

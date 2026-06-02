@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   History,
   FileHeart,
+  Vault,
   LayoutDashboard,
   Settings
 } from 'lucide-react';
@@ -65,11 +66,11 @@ export default function Sidebar({
       {/* Brand area */}
       <div className="p-6 border-b border-slate-50 flex items-center space-x-2.5">
         <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-100">
-          <FileHeart className="w-5 h-5 text-white" />
+          <Vault className="w-5 h-5 text-white" />
         </div>
         <div>
-          <h1 className="font-display font-semibold text-slate-800 text-sm tracking-tight">DocuHub DMS</h1>
-          <p className="text-[10px] text-slate-400 font-mono">WORKSPACE ENTERPRISE</p>
+          <h1 className="font-display font-semibold text-slate-800 text-sm tracking-tight">VaultDMS</h1>
+          <p className="text-[10px] text-slate-400 font-mono">SECURE WORKSPACE</p>
         </div>
       </div>
 

@@ -105,7 +105,7 @@ const DEFAULT_USERS: User[] = [
 const DEFAULT_INSTITUTIONS: Institution[] = [
   {
     id: DEFAULT_INSTITUTION_ID,
-    name: 'SmartDocs Organization',
+    name: 'VaultDMS Organization',
     units: ['Procurement', 'Finance', 'Administration', 'IT', 'Management', 'Compliance', 'Marketing'],
     categoryFolders: {
       Contract: 'Contracts',
@@ -638,7 +638,7 @@ async function runAiOcrAndTagging(fileName: string, mimeType: string, fileDataB6
               }
             },
             {
-              text: `You are an integrated AI engine inside an enterprise Document Management System (DocuHub). 
+              text: `You are an integrated AI engine inside an enterprise Document Management System (VaultDMS).
 This file is titled "${fileName}". It is an image.
 Analyze the image content and perform these tasks:
 1. Extract all legible printed or handwritten text (OCR). Clean it up & preserve layout or structure.
@@ -663,7 +663,7 @@ Format the output strictly as a JSON object with this shape:
         contents = {
           parts: [
             {
-              text: `You are an integrated AI engine inside DocuHub. This file is titled "${fileName}".
+              text: `You are an integrated AI engine inside VaultDMS. This file is titled "${fileName}".
 Here is its core raw text/data:
 "${decodedText}"
 
@@ -1950,7 +1950,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`SmartDocs DMS Full-Stack Engine booting on port: ${PORT}`);
+    console.log(`VaultDMS Full-Stack Engine booting on port: ${PORT}`);
     console.log(`Active workspace location: ${process.cwd()}`);
   });
 }

@@ -1287,7 +1287,7 @@ export default function App() {
                     <span>Intelligent Tag Tracker</span>
                   </h3>
                   <p className="text-[11px] text-slate-400 mb-4 font-medium leading-relaxed">
-                    DocuHub uses Gemini 2.5 Flash to read documents and configure smart category metadata. Browse automated tags across active collections:
+                    VaultDMS uses Gemini 2.5 Flash to read documents and configure smart category metadata. Browse automated tags across active collections:
                   </p>
                   
                   <div className="flex flex-wrap gap-2">
