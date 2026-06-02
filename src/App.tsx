@@ -268,7 +268,7 @@ export default function App() {
               setCurrentUser(session.user);
               return;
             }
-            const staff = data.find((u: User) => u.id === 'staff-1') || data[0];
+            const staff = data.find((u: User) => u.id === 'staff-1' && u.isActive) || data.find((u: User) => u.isActive) || data[0];
             if (!staff) return;
             return fetch('/api/users/switch-profile', {
               method: 'POST',
@@ -421,14 +421,23 @@ export default function App() {
         setSearchQuery('');
         setCategoryFilter('');
         triggerToast(`Signed in as ${data.user.fullName} (${data.user.role})`, 'success');
+      } else {
+        triggerToast(data.error || 'Could not switch profile.', 'error');
       }
-    });
+    })
+    .catch(() => triggerToast('Could not switch profile.', 'error'));
   };
 
   // Create Folder action
   const handleCreateFolder = (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
+
+    const trimmedName = folderName.trim();
+    if (!trimmedName) {
+      triggerToast('Folder name is required.', 'error');
+      return;
+    }
 
     fetch('/api/folders', {
       method: 'POST',
@@ -437,9 +446,9 @@ export default function App() {
         'x-user-id': currentUser.id
       },
       body: JSON.stringify({
-        name: folderName,
+        name: trimmedName,
         parentFolderId: currentFolderId,
-        department: folderScopeDept || currentUser.department
+        department: folderScopeDept.trim() || currentUser.department
       })
     })
     .then(res => res.json())
@@ -448,11 +457,15 @@ export default function App() {
         triggerToast(data.error, 'error');
       } else {
         setFolderName('');
+        setFolderScopeDept('');
         setShowFolderModal(false);
-        triggerToast(`Folder "${data.name}" completed successfully!`, 'success');
+        setCurrentView('my-drive');
+        setCurrentFolderId(data.id);
+        triggerToast(`Cabinet "${data.name}" created successfully!`, 'success');
         reloadData();
       }
-    });
+    })
+    .catch(() => triggerToast('Could not create cabinet. Please try again.', 'error'));
   };
 
   // Load Preset Details helper
@@ -1142,8 +1155,8 @@ export default function App() {
                 className="bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-1.5 text-[11px] font-semibold text-indigo-700 outline-none transition-all hover:bg-indigo-100"
               >
                 {users.map(u => (
-                  <option key={u.id} value={u.id}>
-                    {u.fullName} ({u.role})
+                  <option key={u.id} value={u.id} disabled={!u.isActive}>
+                    {u.fullName} ({u.role}{!u.isActive ? ' · inactive' : ''})
                   </option>
                 ))}
               </select>
@@ -1732,6 +1745,35 @@ export default function App() {
             />
           )}
 
+
+          {/* VIEW: USER MANAGEMENT */}
+          {currentView === 'user-management' && currentUser && (
+            <UserManagementView
+              users={users}
+              currentUser={currentUser}
+              onUsersChanged={(nextUsers, nextCurrentUser) => {
+                setUsers(nextUsers);
+                if (nextCurrentUser) setCurrentUser(nextCurrentUser);
+                reloadData();
+              }}
+              onToast={triggerToast}
+            />
+          )}
+
+          {/* VIEW: SETTINGS */}
+          {currentView === 'settings' && currentUser && (
+            <SettingsView
+              currentUser={currentUser}
+              stats={stats}
+              orgProfile={orgProfile}
+              onSaved={(inst) => {
+                setOrgProfile(inst);
+                triggerToast('Settings updated.', 'success');
+                reloadData();
+              }}
+            />
+          )}
+
         </main>
       </div>
 
@@ -2231,7 +2273,7 @@ export default function App() {
 
               <button
                 type="submit"
-                className="w-full py-2 bg-indigo-650 hover:bg-indigo-700 text-white rounded-xl text-xs font-extrabold"
+                className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-extrabold shadow-sm shadow-indigo-100 transition-all"
               >
                 Create Directory Folder
               </button>
@@ -2282,7 +2324,7 @@ export default function App() {
 
               <button
                 type="submit"
-                className="w-full py-2 bg-indigo-650 hover:bg-indigo-700 text-white rounded-xl text-xs font-extrabold flex items-center justify-center space-x-1"
+                className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-extrabold flex items-center justify-center space-x-1"
               >
                 <Send className="w-3.5 h-3.5 text-white" />
                 <span>Submit Approval Request</span>
@@ -2383,7 +2425,7 @@ export default function App() {
                   <input type="text" value={linkPassword} onChange={(e) => setLinkPassword(e.target.value)} placeholder="Leave blank for no password" className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none" />
                 </div>
 
-                <button onClick={handleCreateShareLink} disabled={linkLoading} className="w-full py-2 bg-indigo-650 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-extrabold flex items-center justify-center space-x-2">
+                <button onClick={handleCreateShareLink} disabled={linkLoading} className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-extrabold flex items-center justify-center space-x-2">
                   {linkLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Link2 className="w-3.5 h-3.5" />}
                   <span>{linkLoading ? 'Creating…' : 'Create link'}</span>
                 </button>
@@ -2394,7 +2436,7 @@ export default function App() {
                   <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Your short link</label>
                   <div className="flex items-center space-x-2">
                     <input readOnly value={shortLinkUrl(createdLink.shortCode)} className="flex-1 bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none font-mono" onFocus={(e) => e.target.select()} />
-                    <button onClick={() => copyToClipboard(shortLinkUrl(createdLink.shortCode))} className="px-3 py-2 bg-indigo-650 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5">
+                    <button onClick={() => copyToClipboard(shortLinkUrl(createdLink.shortCode))} className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5">
                       <Copy className="w-3.5 h-3.5" /><span>Copy</span>
                     </button>
                   </div>
@@ -2462,7 +2504,7 @@ export default function App() {
 
               <button
                 type="submit"
-                className="w-full py-2 bg-indigo-650 hover:bg-indigo-700 text-white rounded-xl text-xs font-extrabold flex items-center justify-center space-x-1"
+                className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-extrabold flex items-center justify-center space-x-1"
               >
                 <Users className="w-3.5 h-3.5 text-white" />
                 <span>Adjust Scoped Permissions</span>
@@ -2502,7 +2544,7 @@ export default function App() {
 
               <button
                 type="submit"
-                className="w-full py-2 bg-indigo-650 hover:bg-indigo-700 text-white rounded-xl text-xs font-extrabold"
+                className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-extrabold shadow-sm shadow-indigo-100 transition-all"
               >
                 Move Document
               </button>
@@ -2585,6 +2627,282 @@ function ActivityLogView() {
         ))}
       </tbody>
     </table>
+  );
+}
+
+
+const USER_ROLE_OPTIONS: User['role'][] = ['Admin', 'Manager', 'Staff', 'Viewer', 'Auditor'];
+
+type UserFormState = Pick<User, 'fullName' | 'email' | 'role' | 'department' | 'isActive'>;
+
+const emptyUserForm: UserFormState = {
+  fullName: '',
+  email: '',
+  role: 'Staff',
+  department: '',
+  isActive: true
+};
+
+function UserManagementView({
+  users,
+  currentUser,
+  onUsersChanged,
+  onToast
+}: {
+  users: User[];
+  currentUser: User;
+  onUsersChanged: (users: User[], currentUser?: User) => void;
+  onToast: (text: string, type?: 'success' | 'info' | 'error') => void;
+}) {
+  const [form, setForm] = useState<UserFormState>({ ...emptyUserForm, department: currentUser.department });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const canManage = currentUser.role === 'Admin';
+  const activeUsers = users.filter(u => u.isActive).length;
+  const adminUsers = users.filter(u => u.role === 'Admin' && u.isActive).length;
+
+  const reset = () => {
+    setEditingId(null);
+    setForm({ ...emptyUserForm, department: currentUser.department });
+    setError('');
+  };
+
+  const refreshUsers = (updated?: User) => {
+    fetch('/api/users')
+      .then(res => res.json())
+      .then((data: User[]) => {
+        const nextCurrent = updated?.id === currentUser.id ? updated : data.find(u => u.id === currentUser.id);
+        onUsersChanged(data, nextCurrent);
+      });
+  };
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canManage) return;
+    setSaving(true);
+    setError('');
+    fetch(editingId ? `/api/users/${editingId}` : '/api/users', {
+      method: editingId ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(form)
+    })
+      .then(res => res.json())
+      .then((data) => {
+        setSaving(false);
+        if (data.error) {
+          setError(data.error);
+          onToast(data.error, 'error');
+          return;
+        }
+        onToast(editingId ? 'User profile updated.' : 'User profile created.', 'success');
+        reset();
+        refreshUsers(data);
+      })
+      .catch(() => {
+        setSaving(false);
+        setError('Could not save user profile.');
+        onToast('Could not save user profile.', 'error');
+      });
+  };
+
+  const edit = (user: User) => {
+    setEditingId(user.id);
+    setForm({
+      fullName: user.fullName,
+      email: user.email,
+      role: user.role,
+      department: user.department,
+      isActive: user.isActive
+    });
+    setError('');
+  };
+
+  const toggleActive = (user: User) => {
+    if (!canManage) return;
+    fetch(`/api/users/${user.id}/toggle-active`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isActive: !user.isActive })
+    })
+      .then(res => res.json())
+      .then((data) => {
+        if (data.error) {
+          onToast(data.error, 'error');
+          return;
+        }
+        onToast(data.isActive ? 'User activated.' : 'User deactivated.', 'success');
+        refreshUsers(data);
+      })
+      .catch(() => onToast('Could not update user status.', 'error'));
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-display font-extrabold text-slate-800 tracking-tight">User Management</h2>
+          <p className="text-xs text-slate-400">Create staff profiles, assign roles and departments, and deactivate unused accounts.</p>
+        </div>
+        <div className="grid grid-cols-2 gap-2 text-right">
+          <div className="bg-white border border-slate-100 rounded-2xl px-4 py-2 shadow-sm">
+            <p className="text-[9px] font-mono font-bold text-slate-400 uppercase">Active Users</p>
+            <p className="font-display text-lg font-extrabold text-slate-800">{activeUsers}</p>
+          </div>
+          <div className="bg-white border border-slate-100 rounded-2xl px-4 py-2 shadow-sm">
+            <p className="text-[9px] font-mono font-bold text-slate-400 uppercase">Admins</p>
+            <p className="font-display text-lg font-extrabold text-indigo-600">{adminUsers}</p>
+          </div>
+        </div>
+      </div>
+
+      {!canManage && (
+        <div className="bg-amber-50 border border-amber-100 text-amber-700 rounded-2xl px-4 py-3 text-xs font-semibold">
+          User records are read-only for your role. Switch to an Admin profile to create or edit users.
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-4 items-start">
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+          <div className="px-4 py-3 bg-slate-50/70 border-b border-slate-100 flex items-center justify-between">
+            <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">Workspace People</span>
+            <span className="text-[10px] text-slate-400 font-semibold">{users.length} total profiles</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-white border-b border-slate-50 text-[10px] font-mono font-bold uppercase text-slate-400">
+                <tr>
+                  <th className="py-3 px-4">Name</th>
+                  <th className="py-3 px-4">Role</th>
+                  <th className="py-3 px-4">Department</th>
+                  <th className="py-3 px-4">Status</th>
+                  <th className="py-3 px-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50 font-medium text-slate-600">
+                {users.map(user => (
+                  <tr key={user.id} className="hover:bg-slate-50/70 transition-colors">
+                    <td className="py-3 px-4">
+                      <div className="flex items-center space-x-3">
+                        <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-mono font-bold text-[11px] uppercase">
+                          {user.fullName.split(' ').map(n => n[0]).join('').slice(0, 3)}
+                        </div>
+                        <div>
+                          <p className="font-bold text-slate-800">{user.fullName}</p>
+                          <p className="text-[10px] text-slate-400">{user.email}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="py-3 px-4"><span className="px-2 py-1 rounded-lg bg-slate-100 text-slate-600 text-[10px] font-mono font-bold">{user.role}</span></td>
+                    <td className="py-3 px-4 text-slate-500">{user.department}</td>
+                    <td className="py-3 px-4">
+                      <span className={`px-2 py-1 rounded-lg text-[10px] font-bold ${user.isActive ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+                        {user.isActive ? 'Active' : 'Inactive'}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-right">
+                      <div className="inline-flex items-center space-x-1">
+                        <button onClick={() => edit(user)} disabled={!canManage} className="p-2 rounded-lg hover:bg-indigo-50 text-slate-400 hover:text-indigo-600 disabled:opacity-40" title="Edit user">
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => toggleActive(user)} disabled={!canManage || user.id === currentUser.id} className="px-2 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 text-[10px] font-bold text-slate-500 disabled:opacity-40">
+                          {user.isActive ? 'Disable' : 'Enable'}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <form onSubmit={submit} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="font-display font-extrabold text-slate-800 text-sm">{editingId ? 'Edit User' : 'Create User'}</h3>
+            {editingId && <button type="button" onClick={reset} className="text-[10px] font-bold text-slate-400 hover:text-slate-600">Cancel</button>}
+          </div>
+          {error && <div className="bg-rose-50 border border-rose-100 text-rose-600 text-[11px] font-semibold rounded-xl p-2.5">{error}</div>}
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Full Name</label>
+            <input value={form.fullName} disabled={!canManage} onChange={(e) => setForm({ ...form, fullName: e.target.value })} required className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none focus:ring-2 focus:ring-indigo-100 focus:bg-white disabled:opacity-60" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Email</label>
+            <input type="email" value={form.email} disabled={!canManage} onChange={(e) => setForm({ ...form, email: e.target.value })} required className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none focus:ring-2 focus:ring-indigo-100 focus:bg-white disabled:opacity-60" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Role</label>
+              <select value={form.role} disabled={!canManage} onChange={(e) => setForm({ ...form, role: e.target.value as User['role'] })} className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none focus:ring-2 focus:ring-indigo-100 focus:bg-white disabled:opacity-60">
+                {USER_ROLE_OPTIONS.map(role => <option key={role} value={role}>{role}</option>)}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Status</label>
+              <select value={form.isActive ? 'active' : 'inactive'} disabled={!canManage} onChange={(e) => setForm({ ...form, isActive: e.target.value === 'active' })} className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none focus:ring-2 focus:ring-indigo-100 focus:bg-white disabled:opacity-60">
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </select>
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Department</label>
+            <input value={form.department} disabled={!canManage} onChange={(e) => setForm({ ...form, department: e.target.value })} required className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none focus:ring-2 focus:ring-indigo-100 focus:bg-white disabled:opacity-60" />
+          </div>
+          <button type="submit" disabled={!canManage || saving} className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-extrabold disabled:opacity-50">
+            {saving ? 'Saving…' : editingId ? 'Save User' : 'Create User'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function SettingsView({
+  currentUser,
+  stats,
+  orgProfile,
+  onSaved
+}: {
+  currentUser: User;
+  stats: DashboardStats | null;
+  orgProfile: Institution | null;
+  onSaved: (inst: Institution) => void;
+}) {
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-xl font-display font-extrabold text-slate-800 tracking-tight">Settings</h2>
+        <p className="text-xs text-slate-400">Configure workspace defaults, filing taxonomy, and account access controls.</p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+          <p className="text-[10px] font-mono font-bold text-slate-400 uppercase mb-1">Current Workspace</p>
+          <h3 className="font-display font-bold text-slate-800">{orgProfile?.name || 'Workspace'}</h3>
+          <p className="text-[11px] text-slate-400 mt-1">{orgProfile?.units?.length || 0} department units configured.</p>
+        </div>
+        <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+          <p className="text-[10px] font-mono font-bold text-slate-400 uppercase mb-1">Document Scope</p>
+          <h3 className="font-display font-bold text-slate-800">{stats?.totalFiles ?? 0} visible files</h3>
+          <p className="text-[11px] text-slate-400 mt-1">Archive, trash, and approval counts remain role-aware.</p>
+        </div>
+        <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+          <p className="text-[10px] font-mono font-bold text-slate-400 uppercase mb-1">Signed In Role</p>
+          <h3 className="font-display font-bold text-slate-800">{currentUser.role}</h3>
+          <p className="text-[11px] text-slate-400 mt-1">{currentUser.department} department access.</p>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+        <div className="flex items-center space-x-2 mb-3">
+          <Database className="w-4 h-4 text-indigo-600" />
+          <h3 className="font-display font-extrabold text-slate-800 text-sm">Filing & Institution Settings</h3>
+        </div>
+        <InstitutionProfileView currentUser={currentUser} onSaved={onSaved} />
+      </div>
+    </div>
   );
 }
 

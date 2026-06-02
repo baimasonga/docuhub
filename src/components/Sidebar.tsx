@@ -18,7 +18,8 @@ import {
   FileHeart,
   Vault,
   LayoutDashboard,
-  Settings
+  Settings,
+  UserCog
 } from 'lucide-react';
 import { User } from '../types';
 
@@ -56,7 +57,9 @@ export default function Sidebar({
 
   // Specific admin tools
   const adminNavItems = [
+    { id: 'user-management', label: 'User Management', icon: UserCog },
     { id: 'departments', label: 'Departments Map', icon: Building2 },
+    { id: 'settings', label: 'Settings', icon: Settings },
     { id: 'institution', label: 'Institution Profile', icon: Settings },
     { id: 'activity-log', label: 'Audit Trail Logs', icon: History },
   ];
