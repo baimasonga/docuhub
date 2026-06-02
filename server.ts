@@ -921,6 +921,8 @@ app.get('/api/stats', (req, res) => {
 
 // Folders List
 app.get('/api/folders', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
   res.json(db.folders);
 });
 
@@ -1077,6 +1079,14 @@ app.post('/api/documents/upload', async (req, res) => {
 
   if (!title || !fileName || !fileData) {
     return res.status(400).json({ error: 'Title, file name, and file data stream are required.' });
+  }
+
+  if (documentType !== undefined && !DOCUMENT_CATEGORIES.includes(documentType as Document['documentType'])) {
+    return res.status(400).json({ error: 'Invalid document category.' });
+  }
+
+  if (folderId !== undefined && folderId !== null && typeof folderId !== 'string') {
+    return res.status(400).json({ error: 'Destination folder id must be a string.' });
   }
 
   // Auto-filing is on by default: the system routes the document into its
