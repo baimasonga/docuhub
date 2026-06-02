@@ -157,7 +157,6 @@ export default function App() {
   const [showMoveModal, setShowMoveModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showApprovalModal, setShowApprovalModal] = useState(false);
-  const [showExternalLinkModal, setShowExternalLinkModal] = useState(false);
 
   // Active inputs / fields state
   const [newCommentText, setNewCommentText] = useState('');
@@ -198,14 +197,6 @@ export default function App() {
   // Move targets
   const [moveTargetFolderId, setMoveTargetFolderId] = useState<string>('root');
 
-  // External link creation options (WeTransfer-style)
-  const [extLinkMessage, setExtLinkMessage] = useState('');
-  const [extLinkAllowDownload, setExtLinkAllowDownload] = useState(true);
-  const [extLinkRequiresPassword, setExtLinkRequiresPassword] = useState(false);
-  const [extLinkPassword, setExtLinkPassword] = useState('');
-  const [extLinkMaxDownloads, setExtLinkMaxDownloads] = useState('');
-  const [extLinkExpiresInDays, setExtLinkExpiresInDays] = useState('7');
-
   // Decision fields (Approve/Reject/Action)
   const [decisionApprovalId, setDecisionApprovalId] = useState<string | null>(null);
   const [decisionComment, setDecisionComment] = useState('');
@@ -216,11 +207,15 @@ export default function App() {
   // Which documents a Move action applies to (single row or a bulk selection).
   const [moveIds, setMoveIds] = useState<string[]>([]);
 
-  // Dropbox-style "Get link" modal state.
+  // Unified "Share link" modal state (Dropbox shareable link + WeTransfer-style
+  // options: message, view-only, download limit, password, expiry).
   const [linkModalDocId, setLinkModalDocId] = useState<string | null>(null);
   const [linkExpiry, setLinkExpiry] = useState<string>('7'); // days, or 'never'
   const [linkPassword, setLinkPassword] = useState<string>('');
   const [linkPermission, setLinkPermission] = useState<'Viewer' | 'Commenter'>('Viewer');
+  const [linkMessage, setLinkMessage] = useState<string>('');
+  const [linkAllowDownload, setLinkAllowDownload] = useState<boolean>(true);
+  const [linkMaxDownloads, setLinkMaxDownloads] = useState<string>('');
   const [createdLink, setCreatedLink] = useState<ExternalShareLink | null>(null);
   const [linkLoading, setLinkLoading] = useState(false);
 
@@ -743,19 +738,27 @@ export default function App() {
     setLinkExpiry('7');
     setLinkPassword('');
     setLinkPermission('Viewer');
+    setLinkMessage('');
+    setLinkAllowDownload(true);
+    setLinkMaxDownloads('');
     setCreatedLink(null);
   };
 
   const handleCreateShareLink = () => {
     if (!linkModalDocId) return;
     setLinkLoading(true);
+    const pw = linkPassword.trim();
     fetch(`/api/documents/${linkModalDocId}/external-link`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         expiresInDays: linkExpiry === 'never' ? null : Number(linkExpiry),
-        password: linkPassword.trim() || undefined,
-        permissionType: linkPermission
+        password: pw || undefined,
+        requiresPassword: Boolean(pw),
+        permissionType: linkPermission,
+        allowDownload: linkAllowDownload,
+        maxDownloads: linkMaxDownloads.trim() ? Number(linkMaxDownloads) : null,
+        message: linkMessage.trim() || undefined
       })
     })
       .then(res => res.json())
@@ -947,41 +950,6 @@ export default function App() {
       } else {
         triggerToast('Permissions sharing matrices successfully adjusted!', 'success');
         setShowShareModal(false);
-        fetchDocDetail(selectedDocId);
-      }
-    });
-  };
-
-  // Generate WeTransfer-style external share link
-  const handleCreateExternalLink = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentUser || !selectedDocId) return;
-
-    fetch(`/api/documents/${selectedDocId}/external-link`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': currentUser.id },
-      body: JSON.stringify({
-        message: extLinkMessage || undefined,
-        allowDownload: extLinkAllowDownload,
-        requiresPassword: extLinkRequiresPassword,
-        password: extLinkRequiresPassword ? extLinkPassword : undefined,
-        maxDownloads: extLinkMaxDownloads ? parseInt(extLinkMaxDownloads) : null,
-        expiresInDays: parseInt(extLinkExpiresInDays) || 7,
-      })
-    })
-    .then(res => res.json())
-    .then(data => {
-      if (data.error) {
-        triggerToast(data.error, 'error');
-      } else {
-        triggerToast('Share link created!', 'success');
-        setShowExternalLinkModal(false);
-        setExtLinkMessage('');
-        setExtLinkPassword('');
-        setExtLinkMaxDownloads('');
-        setExtLinkExpiresInDays('7');
-        setExtLinkAllowDownload(true);
-        setExtLinkRequiresPassword(false);
         fetchDocDetail(selectedDocId);
       }
     });
@@ -1805,11 +1773,8 @@ export default function App() {
               <div className="flex justify-between items-center">
                 <span className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Document Information</span>
                 {currentUser?.role !== 'Viewer' && (
-                  <button 
-                    onClick={() => {
-                      setSelectedDocId(docDetail.document.id);
-                      setShowExternalLinkModal(true);
-                    }}
+                  <button
+                    onClick={() => openLinkModal(docDetail.document.id)}
                     className="text-[9px] text-indigo-600 font-bold hover:underline flex items-center space-x-0.5"
                   >
                     <Link2 className="w-3 h-3 text-indigo-500" />
@@ -2332,106 +2297,6 @@ export default function App() {
         </div>
       )}
 
-      {/* 3b. MODAL: CREATE WETRANSFER-STYLE SHARE LINK */}
-      {showExternalLinkModal && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 mx-4">
-            <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
-              <div>
-                <h3 className="font-display font-extrabold text-slate-800 text-sm">Create Share Link</h3>
-                <p className="text-[10px] text-slate-400 mt-0.5">WeTransfer-style secure file sharing</p>
-              </div>
-              <button onClick={() => setShowExternalLinkModal(false)} className="p-1 hover:bg-slate-100 rounded">
-                <X className="w-4 h-4 text-slate-400" />
-              </button>
-            </div>
-
-            <form onSubmit={handleCreateExternalLink} className="space-y-4 text-xs font-medium text-slate-600">
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Message (optional)</label>
-                <textarea
-                  value={extLinkMessage}
-                  onChange={(e) => setExtLinkMessage(e.target.value)}
-                  placeholder="Add a personal message for the recipient..."
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 px-3 text-xs outline-none resize-none h-16"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Expires In</label>
-                  <select
-                    value={extLinkExpiresInDays}
-                    onChange={(e) => setExtLinkExpiresInDays(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 px-3 text-xs outline-none"
-                  >
-                    <option value="1">1 day</option>
-                    <option value="3">3 days</option>
-                    <option value="7">7 days</option>
-                    <option value="14">14 days</option>
-                    <option value="30">30 days</option>
-                  </select>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Max Downloads</label>
-                  <input
-                    type="number"
-                    value={extLinkMaxDownloads}
-                    onChange={(e) => setExtLinkMaxDownloads(e.target.value)}
-                    placeholder="Unlimited"
-                    min="1"
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 px-3 text-xs outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-2.5">
-                <label className="flex items-center space-x-2.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={extLinkAllowDownload}
-                    onChange={(e) => setExtLinkAllowDownload(e.target.checked)}
-                    className="w-3.5 h-3.5 accent-indigo-600"
-                  />
-                  <span className="text-xs text-slate-600">Allow file download <span className="text-slate-400">(uncheck for view-only)</span></span>
-                </label>
-                <label className="flex items-center space-x-2.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={extLinkRequiresPassword}
-                    onChange={(e) => setExtLinkRequiresPassword(e.target.checked)}
-                    className="w-3.5 h-3.5 accent-indigo-600"
-                  />
-                  <span className="text-xs text-slate-600">Password protect this link</span>
-                </label>
-              </div>
-
-              {extLinkRequiresPassword && (
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Password</label>
-                  <input
-                    type="password"
-                    value={extLinkPassword}
-                    onChange={(e) => setExtLinkPassword(e.target.value)}
-                    placeholder="Set a password for recipients..."
-                    required
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 px-3 text-xs outline-none"
-                  />
-                </div>
-              )}
-
-              <button
-                type="submit"
-                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-extrabold flex items-center justify-center space-x-1.5 transition-colors"
-              >
-                <Link2 className="w-3.5 h-3.5" />
-                <span>Create Share Link</span>
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
       {/* FLOATING SELECTION TOOLBAR (Google-Drive style bulk actions) */}
       {selectedIds.size > 0 && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center space-x-1 bg-slate-900 text-white rounded-2xl shadow-2xl px-3 py-2 text-xs">
@@ -2485,13 +2350,24 @@ export default function App() {
                 <p className="text-[11px] text-slate-500">Anyone with the link can open this document. Tune the access below.</p>
 
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Link expires</label>
-                  <select value={linkExpiry} onChange={(e) => setLinkExpiry(e.target.value)} className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none">
-                    <option value="1">In 24 hours</option>
-                    <option value="7">In 7 days</option>
-                    <option value="30">In 30 days</option>
-                    <option value="never">Never</option>
-                  </select>
+                  <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Message (optional)</label>
+                  <textarea value={linkMessage} onChange={(e) => setLinkMessage(e.target.value)} placeholder="Add a note for the recipient…" className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none resize-none h-14" />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Link expires</label>
+                    <select value={linkExpiry} onChange={(e) => setLinkExpiry(e.target.value)} className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none">
+                      <option value="1">In 24 hours</option>
+                      <option value="7">In 7 days</option>
+                      <option value="30">In 30 days</option>
+                      <option value="never">Never</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Max downloads</label>
+                    <input type="number" min="1" value={linkMaxDownloads} onChange={(e) => setLinkMaxDownloads(e.target.value)} placeholder="Unlimited" className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none" />
+                  </div>
                 </div>
 
                 <div className="space-y-1.5">
@@ -2501,6 +2377,11 @@ export default function App() {
                     <option value="Commenter">Can comment</option>
                   </select>
                 </div>
+
+                <label className="flex items-center space-x-2.5 cursor-pointer">
+                  <input type="checkbox" checked={linkAllowDownload} onChange={(e) => setLinkAllowDownload(e.target.checked)} className="w-3.5 h-3.5 accent-indigo-600" />
+                  <span className="text-xs text-slate-600">Allow download <span className="text-slate-400">(uncheck for view-only)</span></span>
+                </label>
 
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase flex items-center space-x-1"><Lock className="w-3 h-3" /><span>Password (optional)</span></label>
@@ -2523,11 +2404,14 @@ export default function App() {
                     </button>
                   </div>
                 </div>
+                {createdLink.message && <p className="text-[11px] text-slate-500 italic">“{createdLink.message}”</p>}
                 <div className="flex flex-wrap gap-2 text-[10px] font-mono">
                   <span className="px-2 py-1 bg-slate-100 rounded-md text-slate-600">{createdLink.permissionType === 'Commenter' ? 'CAN COMMENT' : 'VIEW ONLY'}</span>
+                  <span className="px-2 py-1 bg-slate-100 rounded-md text-slate-600">{createdLink.allowDownload === false ? 'NO DOWNLOAD' : 'DOWNLOADABLE'}</span>
                   {createdLink.hasPassword && <span className="px-2 py-1 bg-amber-50 text-amber-700 rounded-md flex items-center space-x-1"><Lock className="w-3 h-3" /><span>PASSWORD</span></span>}
                   <span className="px-2 py-1 bg-slate-100 rounded-md text-slate-600">{new Date(createdLink.expiresAt).getFullYear() > 2900 ? 'NO EXPIRY' : `EXPIRES ${new Date(createdLink.expiresAt).toLocaleDateString()}`}</span>
                   <span className="px-2 py-1 bg-emerald-50 text-emerald-700 rounded-md flex items-center space-x-1"><Eye className="w-3 h-3" /><span>VIEWED {createdLink.accessCount}×</span></span>
+                  <span className="px-2 py-1 bg-sky-50 text-sky-700 rounded-md flex items-center space-x-1"><Download className="w-3 h-3" /><span>{createdLink.downloadCount || 0}{createdLink.maxDownloads ? `/${createdLink.maxDownloads}` : ''} DL</span></span>
                 </div>
                 <div className="flex items-center justify-between pt-1">
                   <button onClick={() => setCreatedLink(null)} className="text-[11px] font-bold text-indigo-600 hover:underline">Create another</button>
