@@ -60,7 +60,6 @@ export default function Sidebar({
     { id: 'user-management', label: 'User Management', icon: UserCog },
     { id: 'departments', label: 'Departments Map', icon: Building2 },
     { id: 'settings', label: 'Settings', icon: Settings },
-    { id: 'institution', label: 'Institution Profile', icon: Settings },
     { id: 'activity-log', label: 'Audit Trail Logs', icon: History },
   ];
 
