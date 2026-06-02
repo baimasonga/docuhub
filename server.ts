@@ -1734,17 +1734,37 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    // Serve static files from compiled dist folder in production
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    // SPA fallback: serve index.html for any non-API GET (Express 4 compatible).
-    app.use((req, res, next) => {
+    // In production the server bundle lives at dist/server.mjs; resolve the
+    // static asset directory relative to this file so it works regardless of
+    // what directory Railway uses as the working directory when it runs
+    // `node dist/server.mjs`.
+    const distPath = path.resolve(
+      // import.meta.url is the file:// URL of the compiled server bundle.
+      // Resolving '..' from dist/server.mjs gives us the project root, then
+      // we step back into dist/ for the frontend assets.
+      new URL('.', import.meta.url).pathname
+    );
+    console.log(`[startup] Serving static assets from: ${distPath}`);
+    app.use(express.static(distPath, { index: 'index.html' }));
+    // SPA fallback: serve index.html for any non-API GET so that client-side
+    // routing works correctly (Express 4 compatible).
+    app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
       if (req.method !== 'GET' || req.path.startsWith('/api/')) return next();
-      res.sendFile(path.join(distPath, 'index.html'), { root: '/' }, (err) => {
+      res.sendFile('index.html', { root: distPath }, (err) => {
         if (err) next(err);
       });
     });
   }
+
+  // Generic error handler — must be registered after all routes and middleware
+  // so Express routes errors here instead of propagating them as unhandled
+  // rejections that would otherwise kill the process.
+  app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error('[express] Unhandled route error:', err.message || err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal server error.' });
+    }
+  });
 
   await new Promise<void>((resolve, reject) => {
     const server = app.listen(PORT, '0.0.0.0', () => {
@@ -1759,21 +1779,21 @@ async function startServer() {
   });
 }
 
-// Surface fatal errors in the deploy logs, then exit so the platform restarts a
-// clean process. After an uncaughtException / unhandledRejection the process is
-// in an undefined state; staying alive (only logging) leaves a wedged server
-// that boots fine but stops answering requests. Fail fast and let Railway's
-// auto-restart bring up a healthy container instead.
-let shuttingDown = false;
-function fatal(label: string, err: unknown) {
-  console.error(`[fatal] ${label}:`, err);
-  if (shuttingDown) return;
-  shuttingDown = true;
-  // Give stderr a tick to flush before exiting.
-  setTimeout(() => process.exit(1), 100);
-}
-process.on('uncaughtException', (err) => fatal('uncaughtException', err));
-process.on('unhandledRejection', (reason) => fatal('unhandledRejection', reason));
+// Only treat truly unexpected synchronous crashes as fatal. Background async
+// operations (e.g. Supabase persistence writes) can fail transiently without
+// the server being in an unrecoverable state — logging the error is enough.
+// Exiting on every unhandledRejection was causing the process to die after a
+// successful listen when a background write failed, producing "connection
+// refused" 502s even though the server had booted correctly.
+process.on('uncaughtException', (err) => {
+  console.error('[fatal] uncaughtException — process cannot continue:', err);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  // Log but do NOT exit. An unhandled rejection from a fire-and-forget async
+  // operation (like a Supabase write) should not bring down a healthy server.
+  console.error('[warn] unhandledRejection (non-fatal):', reason);
+});
 
 // Spark up
 startServer().catch((err) => {
