@@ -120,6 +120,40 @@ function downloadHref(fileData: string | undefined, fileType?: string): string {
     : `data:${mime};charset=utf-8,${encodeURIComponent(data)}`;
 }
 
+function getFileFormatInfo(fileType: string, docType?: string): { label: string; bg: string; text: string; Icon: React.ElementType } {
+  const t = (fileType || '').toLowerCase();
+  const d = (docType || '').toLowerCase();
+
+  if (t.includes('pdf')) return { label: 'PDF', bg: 'bg-red-50', text: 'text-red-600', Icon: FileText };
+  if (t.includes('word') || t.includes('docx') || t.includes('officedocument.word') || t === 'doc')
+    return { label: 'DOC', bg: 'bg-blue-50', text: 'text-blue-600', Icon: FileText };
+  if (t.includes('spreadsheet') || t.includes('excel') || t.includes('xlsx') || t.includes('xls') || t.includes('csv') || d.includes('invoice'))
+    return { label: 'XLS', bg: 'bg-emerald-50', text: 'text-emerald-600', Icon: FileSpreadsheet };
+  if (t.includes('png') || t.includes('jpg') || t.includes('jpeg') || t.includes('gif') || t.includes('webp') || t.startsWith('image/'))
+    return { label: 'IMG', bg: 'bg-violet-50', text: 'text-violet-600', Icon: Image };
+  if (t.includes('zip') || t.includes('rar') || t.includes('tar') || t.includes('7z'))
+    return { label: 'ZIP', bg: 'bg-amber-50', text: 'text-amber-600', Icon: File };
+  if (t.includes('json') || t.includes('xml') || t.includes('html') || t.includes('javascript') || t.includes('typescript'))
+    return { label: 'CODE', bg: 'bg-orange-50', text: 'text-orange-600', Icon: FileCode };
+  if (t.includes('text') || t.includes('txt') || t.includes('plain'))
+    return { label: 'TXT', bg: 'bg-slate-100', text: 'text-slate-500', Icon: FileText };
+  return { label: 'FILE', bg: 'bg-slate-100', text: 'text-slate-500', Icon: File };
+}
+
+function FileFormatBadge({ fileType, docType, size = 'sm' }: { fileType?: string; docType?: string; size?: 'sm' | 'md' | 'lg' }) {
+  const { label, bg, text, Icon } = getFileFormatInfo(fileType || '', docType);
+  const iconSize = size === 'lg' ? 'w-5 h-5' : size === 'md' ? 'w-4.5 h-4.5' : 'w-4 h-4';
+  const pad = size === 'lg' ? 'p-2.5' : 'p-2';
+  return (
+    <div className={`relative ${pad} ${bg} ${text} rounded-lg shrink-0`}>
+      <Icon className={iconSize} />
+      <span className={`absolute -bottom-1.5 -right-1.5 text-[6px] font-black px-[3px] py-px rounded-sm leading-none ${bg} ${text} border border-white shadow-sm whitespace-nowrap`}>
+        {label}
+      </span>
+    </div>
+  );
+}
+
 export default function App() {
   // Global Workspace state
   const [users, setUsers] = useState<User[]>([]);
@@ -1131,9 +1165,6 @@ export default function App() {
                   <h1 className="text-2xl font-display font-extrabold text-slate-900 tracking-tight">VaultDMS</h1>
                   <p className="text-xs text-slate-400 font-medium">Secure document vault with AI-OCR tagging, role-based access, versioning, and auditable reviews.</p>
                 </div>
-                <div className="text-right text-[11px] font-mono font-bold text-slate-400">
-                  <span>SYSTEM SERVER ACCESS: SECURE STORAGE OK</span>
-                </div>
               </div>
 
               {/* Statistical Bento Card Layout */}
@@ -1250,7 +1281,7 @@ export default function App() {
                             >
                               <td className="py-3 px-3">
                                 <div className="flex items-center space-x-2.5">
-                                  {doc.documentType === 'Invoice' ? <FileSpreadsheet className="w-4 h-4 text-sky-500" /> : <FileText className="w-4 h-4 text-indigo-500" />}
+                                  <FileFormatBadge fileType={doc.fileType} docType={doc.documentType} size="sm" />
                                   <span className="font-semibold text-slate-700 truncate max-w-[200px]">{doc.title}</span>
                                 </div>
                               </td>
@@ -1302,13 +1333,6 @@ export default function App() {
                     ))}
                   </div>
 
-                  <div className="p-4 bg-slate-50 rounded-xl mt-5">
-                    <p className="text-[10px] font-mono font-bold text-slate-400 uppercase mb-2">Sandbox Quick Instructions</p>
-                    <ul className="text-[10px] text-slate-500 space-y-1.5 list-disc pl-3">
-                      <li>Use the **Upload Document** wizard. Select a **preset template** to test how the OCR indexing automatically assigns categories!</li>
-                      <li>Switch profiles to **Manager (David Vance)** in the header to approve files submitted by other users.</li>
-                    </ul>
-                  </div>
                 </div>
 
               </div>
@@ -1445,9 +1469,7 @@ export default function App() {
                               </td>
                               <td className="py-3 px-4">
                                 <div className="flex items-center space-x-3">
-                                  <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg shrink-0">
-                                    {doc.documentType === 'Invoice' ? <FileSpreadsheet className="w-4.5 h-4.5 text-sky-600" /> : <FileText className="w-4.5 h-4.5" />}
-                                  </div>
+                                  <FileFormatBadge fileType={doc.fileType} docType={doc.documentType} size="md" />
                                   <div className="min-w-0">
                                     <p className="font-semibold text-slate-800 truncate max-w-[240px]">{doc.title}</p>
                                     <p className="text-[9px] text-slate-400 mt-0.5">Owner: {doc.ownerName} • {doc.currentVersion}</p>
@@ -1618,9 +1640,7 @@ export default function App() {
                           <tr key={appr.id} className="hover:bg-slate-50/80 transition-colors">
                             <td className="py-3 px-4">
                               <div className="flex items-center space-x-3">
-                                <div className="p-2 bg-amber-50 text-amber-600 rounded-lg shrink-0">
-                                  <FileText className="w-4 h-4" />
-                                </div>
+                                <FileFormatBadge fileType={appr.documentType} docType={appr.documentType} size="md" />
                                 <div className="min-w-0">
                                   <p className="font-semibold text-slate-800 truncate max-w-[240px]">{appr.documentTitle}</p>
                                   <p className="text-[9px] text-slate-400 mt-0.5">{appr.documentType} • {appr.documentDepartment || 'GLOBAL'}</p>
@@ -1745,9 +1765,7 @@ export default function App() {
           {/* Header detail */}
           <div className="p-5 border-b border-slate-50 flex items-start justify-between bg-slate-50/50">
             <div className="flex items-center space-x-2.5">
-              <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl shrink-0">
-                <FileText className="w-5 h-5" />
-              </div>
+              <FileFormatBadge fileType={docDetail.document.fileType} docType={docDetail.document.documentType} size="lg" />
               <div className="min-w-0">
                 <h3 className="text-xs font-bold text-slate-800 truncate max-w-[200px]">{docDetail.document.title}</h3>
                 <p className="text-[10px] text-slate-400 mt-0.5">UUID: {docDetail.document.id}</p>
