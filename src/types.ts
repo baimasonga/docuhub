@@ -82,7 +82,8 @@ export interface DocumentVersion {
   versionNumber: string; // e.g. "v1", "v2"
   uploadedBy: string; // userId
   uploadedByName: string; // userName
-  fileData?: string; // Base64 data if uploaded, OR plain text
+  fileData?: string; // Base64 data / plain text (legacy + local-dev fallback)
+  storagePath?: string; // object path in Supabase Storage when offloaded
   createdAt: string;
 }
 

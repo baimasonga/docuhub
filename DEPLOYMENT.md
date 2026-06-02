@@ -47,8 +47,22 @@ PORT=3000 npm start
 # open http://localhost:3000
 ```
 
-## Notes
+## Architecture notes
 
-- **Persistence**: state is one JSONB row in Supabase (`docuhub_state` table). Without Supabase env vars, it writes to `data/db.json` in the container — data is lost on redeploy in that case.
-- **Sessions**: in-memory only. A redeploy or crash logs everyone out (acceptable for a demo).
-- **Scaling**: single replica only. The in-memory session store and file-backed fallback don't support horizontal scaling.
+- **File storage**: file binaries are offloaded to a private **Supabase Storage**
+  bucket (`documents`, auto-created at startup) and served via short-lived signed
+  CDN URLs. Inline base64 is kept only as a local-dev fallback and for legacy
+  data (auto-migrated to Storage in the background on first boot).
+- **Sessions** are **stateless HMAC-signed cookies** (no server store), so they
+  survive redeploys and work across multiple instances. The signing key defaults
+  to `SUPABASE_SERVICE_ROLE_KEY`; set `SESSION_SECRET` to rotate/override.
+
+## Remaining limitations
+
+- **Datastore metadata**: documents/folders/users still live in one JSONB row,
+  rewritten on each change — fine for a small team; normalize into Postgres
+  tables for high concurrency / large catalogs.
+- **Storage cleanup**: permanently-deleting a document doesn't yet delete its
+  Storage objects (orphans are harmless but accumulate).
+- **In-panel preview** of offloaded files relies on the download endpoint
+  (signed URL) rather than inline rendering.

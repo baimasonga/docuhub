@@ -91,6 +91,92 @@ if (useSupabase) {
 // mutations persist in order (last write wins, consistently).
 let writeChain: Promise<void> = Promise.resolve();
 
+// ----------------------------------------------------
+// Object storage for file binaries (Supabase Storage)
+// ----------------------------------------------------
+// When Supabase is configured, file bytes live in a private Storage bucket and
+// only the object path is kept on the version (keeping the JSONB datastore
+// small and serving via the CDN through short-lived signed URLs). Without
+// Supabase, files stay inline as base64/text (local-dev fallback).
+const STORAGE_BUCKET = 'documents';
+const storageEnabled = useSupabase;
+
+// Create the private bucket once at startup (no-op if it already exists).
+async function ensureBucket(): Promise<void> {
+  if (!storageEnabled || !supabase) return;
+  try {
+    const { data, error } = await supabase.storage.getBucket(STORAGE_BUCKET);
+    if (data && !error) return;
+    const { error: createErr } = await supabase.storage.createBucket(STORAGE_BUCKET, { public: false });
+    if (createErr && !/exists/i.test(createErr.message)) {
+      console.error('[storage] Could not create bucket:', createErr.message);
+    } else {
+      console.log(`[storage] Bucket "${STORAGE_BUCKET}" ready.`);
+    }
+  } catch (err) {
+    console.error('[storage] ensureBucket failed:', (err as Error).message);
+  }
+}
+
+// Upload bytes for a version; returns the object path on success, else null.
+async function uploadVersionFile(docId: string, versionId: string, fileName: string, buffer: Buffer, contentType: string): Promise<string | null> {
+  if (!storageEnabled || !supabase) return null;
+  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const objectPath = `${docId}/${versionId}/${safeName}`;
+  const { error } = await supabase.storage.from(STORAGE_BUCKET).upload(objectPath, buffer, { contentType, upsert: true });
+  if (error) {
+    console.error('[storage] upload failed:', error.message);
+    return null;
+  }
+  return objectPath;
+}
+
+// Short-lived signed CDN URL for a stored object (download forces attachment).
+async function signedUrlFor(objectPath: string, opts: { download?: string | boolean } = {}): Promise<string | null> {
+  if (!storageEnabled || !supabase) return null;
+  const { data, error } = await supabase.storage.from(STORAGE_BUCKET).createSignedUrl(objectPath, 60, opts);
+  if (error || !data) {
+    console.error('[storage] signed url failed:', error?.message);
+    return null;
+  }
+  return data.signedUrl;
+}
+
+// Move a version's bytes into Storage (when enabled): upload, then replace the
+// inline fileData with a storagePath. Best-effort — keeps inline data on failure.
+async function offloadVersion(version: DocumentVersion, fileData?: string, fileType?: string): Promise<void> {
+  const data = fileData ?? version.fileData;
+  if (!storageEnabled || !data) return;
+  const buffer = storedFileToBuffer(data);
+  const path = await uploadVersionFile(version.documentId, version.id, version.fileName, buffer, mimeForType(fileType ?? version.fileType));
+  if (path) {
+    version.storagePath = path;
+    delete version.fileData;
+  }
+}
+
+// One-time backfill: move any inline file bytes into Storage. Runs in the
+// background at startup; subsequent boots find storagePath already set.
+async function migrateFilesToStorage(): Promise<void> {
+  if (!storageEnabled) return;
+  const pending = db.versions.filter(v => v.fileData && !v.storagePath);
+  if (pending.length === 0) return;
+  console.log(`[storage] Migrating ${pending.length} inline file(s) to Storage…`);
+  let migrated = 0;
+  for (const v of pending) {
+    try {
+      await offloadVersion(v);
+      if (v.storagePath) migrated++;
+    } catch (err) {
+      console.error('[storage] migrate failed for version', v.id, (err as Error).message);
+    }
+  }
+  if (migrated > 0) {
+    writeDb();
+    console.log(`[storage] Migrated ${migrated}/${pending.length} file(s) to Storage.`);
+  }
+}
+
 // Initial Mock Data
 const DEFAULT_INSTITUTION_ID = 'inst-smartdocs';
 
@@ -298,17 +384,48 @@ async function initStore(): Promise<void> {
 // ----------------------------------------------------
 // Session-based identity (replaces spoofable x-user-* headers)
 // ----------------------------------------------------
-// A profile switch mints a server-side session id stored in an HttpOnly
-// cookie. Identity is resolved from the session, so a client can no longer
-// impersonate another user/role by setting request headers.
-const sessions: Record<string, string> = {}; // sessionId -> userId
-
-function genToken(prefix = 's'): string {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+// A profile switch mints a stateless, HMAC-signed cookie (no server-side store),
+// so identity survives redeploys / multiple instances and still can't be spoofed
+// by setting request headers. The signing secret defaults to the Supabase
+// service-role key (already a stable secret in prod) so it works with zero extra
+// config; set SESSION_SECRET to rotate/override.
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+const SESSION_SECRET =
+  process.env.SESSION_SECRET ||
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_KEY ||
+  crypto.randomBytes(32).toString('hex'); // dev fallback (won't persist across restarts)
+if (!process.env.SESSION_SECRET && !useSupabase) {
+  console.warn('[startup] No SESSION_SECRET set; using an ephemeral secret — logins will reset on restart.');
 }
 
-// Short, human-shareable code for /s/<code> links. Retries on the (unlikely)
-// chance of a collision so codes stay unique.
+function b64url(buf: Buffer): string {
+  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function signSession(userId: string, expMs: number): string {
+  const payload = b64url(Buffer.from(`${userId}.${expMs}`, 'utf8'));
+  const sig = b64url(crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest());
+  return `${payload}.${sig}`;
+}
+function verifySession(token: string): string | null {
+  const dot = token.lastIndexOf('.');
+  if (dot < 0) return null;
+  const payload = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  const expected = b64url(crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest());
+  // constant-time compare
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  const decoded = Buffer.from(payload.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+  const sep = decoded.lastIndexOf('.');
+  if (sep < 0) return null;
+  const userId = decoded.slice(0, sep);
+  const expMs = Number(decoded.slice(sep + 1));
+  if (!userId || !Number.isFinite(expMs) || Date.now() > expMs) return null;
+  return userId;
+}
+
 function genShortCode(): string {
   const alphabet = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
@@ -336,11 +453,11 @@ function parseCookies(req: express.Request): Record<string, string> {
 }
 
 function getUser(req: express.Request): User | null {
-  const sid = parseCookies(req)['sid'];
-  if (sid && sessions[sid]) {
-    return db.users.find(u => u.id === sessions[sid]) || null;
-  }
-  return null;
+  const token = parseCookies(req)['sid'];
+  if (!token) return null;
+  const userId = verifySession(token);
+  if (!userId) return null;
+  return db.users.find(u => u.id === userId) || null;
 }
 
 // ----------------------------------------------------
@@ -903,8 +1020,9 @@ app.post('/api/users/:id/toggle-active', (req, res) => {
   res.json(target);
 });
 
-// Switch the active demo profile. This mints a server-side session and sets
-// an HttpOnly cookie; all subsequent identity is resolved from that session.
+// Switch the active demo profile. Mints a stateless, HMAC-signed cookie;
+// identity is resolved from the signature, so it survives redeploys and can't
+// be spoofed via headers.
 app.post('/api/users/switch-profile', (req, res) => {
   const { userId } = req.body;
   const user = db.users.find(u => u.id === userId);
@@ -915,9 +1033,8 @@ app.post('/api/users/switch-profile', (req, res) => {
     return res.status(403).json({ error: 'This user profile is inactive.' });
   }
 
-  const sid = genToken('sess');
-  sessions[sid] = user.id;
-  res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; Path=/; SameSite=Lax; Max-Age=86400`);
+  const token = signSession(user.id, Date.now() + SESSION_TTL_MS);
+  res.setHeader('Set-Cookie', `sid=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${SESSION_TTL_MS / 1000}`);
 
   // Audit switched
   addAuditLog(userId, 'Login', undefined, undefined, `User switched profile to ${user.fullName} (${user.role}).`);
@@ -1368,6 +1485,7 @@ app.post('/api/documents/upload', async (req, res) => {
 
     db.documents.push(newDoc);
     db.versions.push(newVersion);
+    await offloadVersion(newVersion, fileData, fileType);
     writeDb();
 
     const filingNote = filedInto
@@ -1438,6 +1556,7 @@ app.post('/api/documents/:id/version', async (req, res) => {
     doc.tags = mergedTags;
 
     db.versions.push(newVersion);
+    await offloadVersion(newVersion, fileData, fileType);
     writeDb();
 
     addAuditLog(userId, 'Upload Version', docId, doc.title, `Uploaded version ${nextVerStr} replacing former draft.`);
@@ -2009,7 +2128,7 @@ ${wrong ? '<div class="err">Incorrect password. Try again.</div>' : ''}
 
 // Validate a share link (active, not expired, password) and stream the latest
 // version inline. Shared by the long token route and the short /s/<code> route.
-function serveSharedLink(req: express.Request, res: express.Response, link?: ExternalShareLink) {
+async function serveSharedLink(req: express.Request, res: express.Response, link?: ExternalShareLink) {
   if (!link) return res.status(404).send('This share link is invalid.');
   if (!link.isActive) return res.status(403).send('This share link has been revoked.');
   if (new Date(link.expiresAt).getTime() < Date.now()) {
@@ -2045,6 +2164,12 @@ function serveSharedLink(req: express.Request, res: express.Response, link?: Ext
     .filter(v => v.documentId === doc.id)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
 
+  // Offloaded to Storage: redirect to a short-lived signed CDN URL.
+  if (latest && latest.storagePath) {
+    const url = await signedUrlFor(latest.storagePath, { download: link.allowDownload !== false ? latest.fileName : false });
+    if (url) return res.redirect(302, url);
+  }
+
   if (!latest || !latest.fileData) {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     return res.send(doc.ocrText || 'No content available for this document.');
@@ -2058,17 +2183,19 @@ function serveSharedLink(req: express.Request, res: express.Response, link?: Ext
 }
 
 app.get('/api/external/:token', (req, res) => {
-  serveSharedLink(req, res, db.externalLinks.find(l => l.token === req.params.token));
+  void serveSharedLink(req, res, db.externalLinks.find(l => l.token === req.params.token))
+    .catch(err => { console.error('[share] serve error:', err); if (!res.headersSent) res.status(500).send('Error serving document.'); });
 });
 
 // Short shareable link. Registered as a normal route (before the SPA fallback,
 // which is added later in startServer), so /s/<code> resolves to a document.
 app.get('/s/:code', (req, res) => {
-  serveSharedLink(req, res, db.externalLinks.find(l => l.shortCode === req.params.code));
+  void serveSharedLink(req, res, db.externalLinks.find(l => l.shortCode === req.params.code))
+    .catch(err => { console.error('[share] serve error:', err); if (!res.headersSent) res.status(500).send('Error serving document.'); });
 });
 
 // Download the latest version of a document as an attachment (authenticated).
-app.get('/api/documents/:id/download', (req, res) => {
+app.get('/api/documents/:id/download', async (req, res) => {
   const user = getUser(req);
   if (!user) return res.status(401).json({ error: 'Not authenticated.' });
   const doc = db.documents.find(d => d.id === req.params.id);
@@ -2083,6 +2210,12 @@ app.get('/api/documents/:id/download', (req, res) => {
 
   addAuditLog(user.id, 'Download', doc.id, doc.title, `Downloaded ${latest ? latest.versionNumber : 'document'}.`);
 
+  // Offloaded to Storage: redirect to a short-lived signed CDN URL (attachment).
+  if (latest && latest.storagePath) {
+    const url = await signedUrlFor(latest.storagePath, { download: latest.fileName });
+    if (url) return res.redirect(302, url);
+  }
+
   if (!latest || !latest.fileData) {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${doc.title}.txt"`);
@@ -2092,6 +2225,31 @@ app.get('/api/documents/:id/download', (req, res) => {
   const buffer = storedFileToBuffer(latest.fileData);
   res.setHeader('Content-Type', mimeForType(latest.fileType));
   res.setHeader('Content-Disposition', `attachment; filename="${latest.fileName}"`);
+  return res.send(buffer);
+});
+
+// Download a specific version as an attachment (authenticated). Powers the
+// per-version links in the detail panel for both stored and inline files.
+app.get('/api/documents/:id/versions/:versionId/download', async (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const doc = db.documents.find(d => d.id === req.params.id);
+  if (!doc) return res.status(404).json({ error: 'Document not found.' });
+  if (!canViewDocument(user, doc)) {
+    return res.status(403).json({ error: 'You do not have access to this document.' });
+  }
+  const ver = db.versions.find(v => v.id === req.params.versionId && v.documentId === doc.id);
+  if (!ver) return res.status(404).json({ error: 'Version not found.' });
+
+  if (ver.storagePath) {
+    const url = await signedUrlFor(ver.storagePath, { download: ver.fileName });
+    if (url) return res.redirect(302, url);
+  }
+  if (!ver.fileData) return res.status(404).send('No content available for this version.');
+
+  const buffer = storedFileToBuffer(ver.fileData);
+  res.setHeader('Content-Type', mimeForType(ver.fileType));
+  res.setHeader('Content-Disposition', `attachment; filename="${ver.fileName}"`);
   return res.send(buffer);
 });
 
@@ -2177,6 +2335,14 @@ async function startServer() {
     console.log(`Chore Box DMS Full-Stack Engine booting on port: ${PORT}`);
     console.log(`Active workspace location: ${process.cwd()}`);
   });
+
+  // Prepare object storage and migrate any inline file bytes in the background,
+  // so the health check isn't blocked by (potentially large) uploads.
+  if (storageEnabled) {
+    ensureBucket()
+      .then(() => migrateFilesToStorage())
+      .catch(err => console.error('[storage] background init failed:', err));
+  }
 }
 
 // Surface fatal errors in the deploy logs, then exit so the platform restarts a

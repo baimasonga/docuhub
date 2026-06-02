@@ -2319,8 +2319,10 @@ export default function App() {
                       <p className="text-[8px] text-slate-400 mt-0.5">Uploaded by {ver.uploadedByName} • {(ver.fileSize / 1024).toFixed(1)} KB</p>
                     </div>
                     <a
-                      href={downloadHref(ver.fileData, ver.fileType)}
+                      href={`/api/documents/${docDetail.document.id}/versions/${ver.id}/download`}
                       download={ver.fileName}
+                      target="_blank"
+                      rel="noreferrer"
                       className="p-1.5 bg-white border border-slate-150 hover:bg-slate-50 rounded-lg text-slate-500 hover:text-slate-800 transition-colors"
                       title="Download file"
                     >
