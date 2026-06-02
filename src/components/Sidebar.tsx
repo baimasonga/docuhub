@@ -42,8 +42,8 @@ export default function Sidebar({
   
   const mainNavItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'my-drive', label: 'My Drive', icon: Folder },
-    { id: 'shared-with-me', label: 'Shared With Me', icon: Clock }, // recent style shared
+    { id: 'my-drive', label: 'Folder Cabinets', icon: Folder },
+    { id: 'shared-with-me', label: 'Shares', icon: Clock },
     { id: 'starred', label: 'Starred Files', icon: Star },
   ];
 

@@ -1007,7 +1007,7 @@ export default function App() {
 
   // Utility calculations for breadcrumb navigation
   const getBreadcrumbs = () => {
-    const list = [{ id: 'root', name: 'My Drive' }];
+    const list = [{ id: 'root', name: 'Folder Cabinets' }];
     if (!currentFolderId) return list;
 
     let targetFolder = folders.find(f => f.id === currentFolderId);
@@ -1373,7 +1373,7 @@ export default function App() {
                       {currentView === 'archive' && <Archive className="w-4 h-4 text-sky-500" />}
                       {currentView === 'trash' && <Trash2 className="w-4 h-4 text-slate-400" />}
                       {currentView === 'shared-with-me' && <Clock className="w-4 h-4 text-indigo-500" />}
-                      <span>{currentView.replace(/-/g, ' ')} Overview</span>
+                      <span>{ { 'shared-with-me': 'Shares', 'starred': 'Starred Files', 'approved-files': 'Approved Documents', 'archive': 'Archive', 'trash': 'Trash' }[currentView] ?? currentView.replace(/-/g, ' ') } Overview</span>
                     </span>
                   )}
                 </div>
@@ -2200,7 +2200,7 @@ export default function App() {
                   </div>
                 ) : (
                   <p className="text-[10px] text-slate-500 pl-6">
-                    Will be placed in the current location ({currentFolderId ? (folders.find(f => f.id === currentFolderId)?.name || 'selected folder') : 'My Drive / Root'}).
+                    Will be placed in the current location ({currentFolderId ? (folders.find(f => f.id === currentFolderId)?.name || 'selected folder') : 'Folder Cabinets / Root'}).
                   </p>
                 )}
               </div>
@@ -2514,7 +2514,7 @@ export default function App() {
                   onChange={(e) => setMoveTargetFolderId(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none"
                 >
-                  <option value="root">My Drive / Root Directory Area</option>
+                  <option value="root">Folder Cabinets / Root</option>
                   {folders.map(f => (
                     <option key={f.id} value={f.id}>
                       {f.name} ({f.department || 'GLOBAL'})
