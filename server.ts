@@ -7,6 +7,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import crypto from 'crypto';
 import { GoogleGenAI, Type } from '@google/genai';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
@@ -1558,6 +1559,27 @@ app.post('/api/documents/:id/external-link', (req, res) => {
     return res.status(403).json({ error: 'You do not have permission to create a share link for this document.' });
   }
 
+  const {
+    message,
+    allowDownload = true,
+    requiresPassword = false,
+    password,
+    maxDownloads,
+    expiresInDays = 7,
+  } = req.body as {
+    message?: string;
+    allowDownload?: boolean;
+    requiresPassword?: boolean;
+    password?: string;
+    maxDownloads?: number | null;
+    expiresInDays?: number;
+  };
+
+  // Get file metadata from the latest version
+  const latest = db.versions
+    .filter(v => v.documentId === docId)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+
   // Token creation
   const token = `ext-${Math.random().toString(36).substring(2)}${Math.random().toString(36).substring(2)}`;
   
@@ -1567,17 +1589,30 @@ app.post('/api/documents/:id/external-link', (req, res) => {
     token,
     createdBy: userId,
     permissionType: 'Viewer',
-    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // 7 days
+    expiresAt: new Date(Date.now() + (expiresInDays || 7) * 24 * 60 * 60 * 1000).toISOString(),
     isActive: true,
     accessCount: 0,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    fileName: latest?.fileName || doc.title,
+    fileSize: latest?.fileSize || 0,
+    fileType: latest?.fileType || 'unknown',
+    downloadCount: 0,
+    maxDownloads: maxDownloads || null,
+    message: message || undefined,
+    allowDownload: allowDownload !== false,
+    requiresPassword: requiresPassword === true,
+    passwordHash: (requiresPassword && password)
+      ? crypto.createHash('sha256').update(password).digest('hex')
+      : undefined,
   };
 
   db.externalLinks.push(extLink);
   writeDb();
 
-  addAuditLog(userId, 'Create Secure Link', docId, doc.title, `Generated secure cloud external sharing key token for view authorization: ${token}`);
-  res.json({ success: true, link: extLink });
+  // Strip passwordHash before sending to client
+  const { passwordHash: _ph, ...safeLink } = extLink;
+  addAuditLog(userId, 'Create Secure Link', docId, doc.title, `Generated WeTransfer-style secure share link: ${token}`);
+  res.json({ success: true, link: safeLink });
 });
 
 // Revoke external sharing link
@@ -1685,9 +1720,35 @@ app.get('/api/approvals/mine', (req, res) => {
   res.json(mine);
 });
 
+// Public JSON endpoint: file info for a WeTransfer-style share link landing page.
+// Returns metadata without serving the actual file content. No auth required.
+app.get('/api/share/:token', (req, res) => {
+  const link = db.externalLinks.find(l => l.token === req.params.token);
+  if (!link) return res.status(404).json({ error: 'This share link is invalid.' });
+  if (!link.isActive) return res.status(403).json({ error: 'This share link has been revoked.' });
+
+  const expired = new Date(link.expiresAt).getTime() < Date.now();
+  const exhausted = link.maxDownloads != null && (link.downloadCount || 0) >= link.maxDownloads;
+
+  res.json({
+    fileName: link.fileName,
+    fileSize: link.fileSize,
+    fileType: link.fileType,
+    message: link.message,
+    expiresAt: link.expiresAt,
+    allowDownload: link.allowDownload,
+    requiresPassword: link.requiresPassword,
+    downloadCount: link.downloadCount || 0,
+    maxDownloads: link.maxDownloads,
+    accessCount: link.accessCount || 0,
+    expired,
+    exhausted,
+  });
+});
+
 // Public access to a document via a secure external share link token.
 // Validates active state and expiry, increments the access counter, and
-// serves the latest version inline.
+// serves the latest version (attachment if allowDownload, inline otherwise).
 app.get('/api/external/:token', (req, res) => {
   const link = db.externalLinks.find(l => l.token === req.params.token);
   if (!link) return res.status(404).send('This share link is invalid.');
@@ -1695,11 +1756,29 @@ app.get('/api/external/:token', (req, res) => {
   if (new Date(link.expiresAt).getTime() < Date.now()) {
     return res.status(410).send('This share link has expired.');
   }
+  if (link.maxDownloads != null && (link.downloadCount || 0) >= link.maxDownloads) {
+    return res.status(410).send('This share link has reached its download limit.');
+  }
+
+  // Password check
+  if (link.requiresPassword && link.passwordHash) {
+    const provided = req.query.password as string | undefined;
+    if (!provided) {
+      return res.status(401).send('This share link is password-protected. Add ?password=<pass> to the URL.');
+    }
+    const hash = crypto.createHash('sha256').update(provided).digest('hex');
+    if (hash !== link.passwordHash) {
+      return res.status(403).send('Incorrect password for this share link.');
+    }
+  }
 
   const doc = db.documents.find(d => d.id === link.documentId && !d.isDeleted);
   if (!doc) return res.status(404).send('The shared document is no longer available.');
 
   link.accessCount = (link.accessCount || 0) + 1;
+  if (link.allowDownload !== false) {
+    link.downloadCount = (link.downloadCount || 0) + 1;
+  }
   writeDb();
   addAuditLog(link.createdBy, 'External Access', doc.id, doc.title, `Document opened via external secure link (view #${link.accessCount}).`);
 
@@ -1714,7 +1793,8 @@ app.get('/api/external/:token', (req, res) => {
 
   const buffer = storedFileToBuffer(latest.fileData);
   res.setHeader('Content-Type', mimeForType(latest.fileType));
-  res.setHeader('Content-Disposition', `inline; filename="${latest.fileName}"`);
+  const disposition = link.allowDownload !== false ? 'attachment' : 'inline';
+  res.setHeader('Content-Disposition', `${disposition}; filename="${latest.fileName}"`);
   return res.send(buffer);
 });
 

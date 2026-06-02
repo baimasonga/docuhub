@@ -140,6 +140,16 @@ export interface ExternalShareLink {
   isActive: boolean;
   accessCount: number;
   createdAt: string;
+  // WeTransfer-style sharing fields
+  fileName: string;
+  fileSize: number;
+  fileType: string;
+  downloadCount: number;
+  maxDownloads?: number | null;
+  message?: string;
+  allowDownload: boolean;
+  requiresPassword: boolean;
+  passwordHash?: string;
 }
 
 export interface DashboardStats {
