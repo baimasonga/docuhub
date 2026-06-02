@@ -1,0 +1,837 @@
+{
+  "users": [
+    {
+      "id": "admin-1",
+      "fullName": "Mohamed Bangura",
+      "email": "mohamedbangura@avdp.org.sl",
+      "role": "Admin",
+      "department": "Procurement",
+      "isActive": true,
+      "institutionId": "inst-smartdocs"
+    }
+  ],
+  "folders": [
+    {
+      "id": "proc-root",
+      "name": "Procurement",
+      "parentFolderId": null,
+      "ownerId": "admin-1",
+      "department": "Procurement",
+      "createdAt": "2026-06-01T22:08:16.979Z"
+    },
+    {
+      "id": "proc-bids",
+      "name": "Bid Documents",
+      "parentFolderId": "proc-root",
+      "ownerId": "admin-1",
+      "department": "Procurement",
+      "createdAt": "2026-06-01T22:08:16.980Z"
+    },
+    {
+      "id": "proc-contracts",
+      "name": "Contracts",
+      "parentFolderId": "proc-root",
+      "ownerId": "admin-1",
+      "department": "Procurement",
+      "createdAt": "2026-06-01T22:08:16.980Z"
+    },
+    {
+      "id": "fin-root",
+      "name": "Finance",
+      "parentFolderId": null,
+      "ownerId": "admin-1",
+      "department": "Finance",
+      "createdAt": "2026-06-01T22:08:16.980Z"
+    },
+    {
+      "id": "fin-invoices",
+      "name": "Invoices",
+      "parentFolderId": "fin-root",
+      "ownerId": "admin-1",
+      "department": "Finance",
+      "createdAt": "2026-06-01T22:08:16.980Z"
+    },
+    {
+      "id": "fin-vouchers",
+      "name": "Payment Vouchers",
+      "parentFolderId": "fin-root",
+      "ownerId": "admin-1",
+      "department": "Finance",
+      "createdAt": "2026-06-01T22:08:16.980Z"
+    },
+    {
+      "id": "admin-root",
+      "name": "Administration",
+      "parentFolderId": null,
+      "ownerId": "admin-1",
+      "department": "Administration",
+      "createdAt": "2026-06-01T22:08:16.980Z"
+    },
+    {
+      "id": "it-root",
+      "name": "IT Configs",
+      "parentFolderId": null,
+      "ownerId": "admin-1",
+      "department": "IT",
+      "createdAt": "2026-06-01T22:08:16.980Z"
+    },
+    {
+      "id": "mgmt-root",
+      "name": "Management Papers",
+      "parentFolderId": null,
+      "ownerId": "admin-1",
+      "department": "Management",
+      "createdAt": "2026-06-01T22:08:16.980Z"
+    },
+    {
+      "id": "folder-1780394460653",
+      "name": "Oil Palm",
+      "parentFolderId": null,
+      "ownerId": "admin-1",
+      "department": "Tree Crops",
+      "createdAt": "2026-06-02T10:01:00.653Z"
+    },
+    {
+      "id": "auto-general-documents-proc-root-mpwhjpte483",
+      "name": "General Documents",
+      "parentFolderId": "proc-root",
+      "ownerId": "admin-1",
+      "department": "Procurement",
+      "createdAt": "2026-06-02T10:19:19.538Z"
+    }
+  ],
+  "documents": [
+    {
+      "id": "doc-1",
+      "title": "Supplier Supply Chain Agreement 2026",
+      "description": "Annual procurement agreement template for tier-1 supply vendors.",
+      "ownerId": "admin-1",
+      "ownerName": "Mohamed Bangura",
+      "department": "Procurement",
+      "folderId": "proc-contracts",
+      "documentType": "Contract",
+      "status": "Approved",
+      "confidentialityLevel": "Official Record",
+      "currentVersion": "v2",
+      "isStarred": true,
+      "isArchived": false,
+      "isDeleted": false,
+      "tags": [
+        "contract",
+        "procurement",
+        "vendor",
+        "approved"
+      ],
+      "ocrText": "This SUPPLY CHAIN AGREEMENT is entered into on this 1st day of January 2026. PARTIES: DocuHub logistics and Tier-1 vendors. DELIVERABLES: Weekly fulfillment auditing, dynamic routing optimization, SLA 99.5% accuracy. TERMS: Net 30 days.",
+      "createdAt": "2026-05-15T10:00:00Z",
+      "updatedAt": "2026-05-20T14:30:00Z"
+    },
+    {
+      "id": "doc-2",
+      "title": "Q1 System Audit Report",
+      "description": "Initial performance log of storage systems and local database backups.",
+      "ownerId": "admin-1",
+      "ownerName": "Sarah Jenkins",
+      "department": "IT",
+      "folderId": "it-root",
+      "documentType": "Report",
+      "status": "Pending Approval",
+      "confidentialityLevel": "Normal File",
+      "currentVersion": "v1",
+      "isStarred": false,
+      "isArchived": false,
+      "isDeleted": false,
+      "tags": [
+        "it",
+        "report",
+        "backup",
+        "audit"
+      ],
+      "ocrText": "SYSTEM AUDIT REPORT:\n- Backup storage node: ONLINE\n- Disk utility: 42% utilized\n- SSL Certs updated for all load balance units.\n- Recommendation: Setup multi-disk raid configurations.",
+      "createdAt": "2026-05-25T09:12:00Z",
+      "updatedAt": "2026-05-25T09:12:00Z"
+    },
+    {
+      "id": "doc-3",
+      "title": "Acme Invoice AI-12903",
+      "description": "Hardware provisioning order for local engineering staff.",
+      "ownerId": "admin-1",
+      "ownerName": "Mohamed Bangura",
+      "department": "Finance",
+      "folderId": "fin-invoices",
+      "documentType": "Invoice",
+      "status": "Approved",
+      "confidentialityLevel": "Official Record",
+      "currentVersion": "v1",
+      "isStarred": false,
+      "isArchived": false,
+      "isDeleted": false,
+      "tags": [
+        "invoice",
+        "finance",
+        "hardware",
+        "approved-2026"
+      ],
+      "ocrText": "INVOICE: #AI-12903\nDATE: April 12, 2026\nAcme Hardware Supplies LLC\nTO: SmartDocs organization Finance Unit.\n- 5x Enterprise Workstations - $7,500.00\n- 3x IPS Developer Monitors - $1,200.00\nTOTAL: $8,700.00\nPAID on May 1st 2026.",
+      "createdAt": "2026-04-15T11:00:00Z",
+      "updatedAt": "2026-05-01T16:00:00Z"
+    },
+    {
+      "id": "doc-1780395559538",
+      "title": "logs.1780370912820",
+      "description": "Standard document upload.",
+      "ownerId": "admin-1",
+      "ownerName": "Mohamed Bangura",
+      "department": "Procurement",
+      "folderId": "auto-general-documents-proc-root-mpwhjpte483",
+      "documentType": "Other",
+      "status": "Draft",
+      "confidentialityLevel": "Normal File",
+      "currentVersion": "v1",
+      "isStarred": false,
+      "isArchived": false,
+      "isDeleted": false,
+      "tags": [
+        "uploaded",
+        "indexed"
+      ],
+      "ocrText": "[HEURISTIC OCR ANALYSIS] Document: logs.1780370912820.log\nDetected text patterns. Indexed at 6/2/2026, 10:19:19 AM.\nPreview snippet:\n2026-06-02T03:25:14.552694376Z [inf]  scheduling build on Metal builder \"builder-cbuxkt\"\n2026-06-02T03:25:15.629687627Z [inf]  unpacking archive\n2026-06-02T03:25:15.737993232Z [inf]  using build driver nixpacks-v1.41.0\n2026-06-02T03:25:15.747484414Z \nIndex complete.",
+      "createdAt": "2026-06-02T10:19:19.538Z",
+      "updatedAt": "2026-06-02T10:19:19.538Z"
+    }
+  ],
+  "versions": [
+    {
+      "id": "ver-1a",
+      "documentId": "doc-1",
+      "fileName": "supplier_agreement_v1.txt",
+      "fileSize": 4500,
+      "fileType": "txt",
+      "versionNumber": "v1",
+      "uploadedBy": "admin-1",
+      "uploadedByName": "Mohamed Bangura",
+      "fileData": "This SUPPLY CHAIN AGREEMENT is entered into on this 1st day of January 2026.",
+      "createdAt": "2026-05-15T10:00:00Z"
+    },
+    {
+      "id": "ver-1b",
+      "documentId": "doc-1",
+      "fileName": "supplier_agreement_final.txt",
+      "fileSize": 5200,
+      "fileType": "txt",
+      "versionNumber": "v2",
+      "uploadedBy": "admin-1",
+      "uploadedByName": "Mohamed Bangura",
+      "fileData": "This SUPPLY CHAIN AGREEMENT is entered into on this 1st day of January 2026. PARTIES: DocuHub logistics and Tier-1 vendors. DELIVERABLES: Weekly fulfillment auditing, dynamic routing optimization, SLA 99.5% accuracy. TERMS: Net 30 days.",
+      "createdAt": "2026-05-20T14:30:00Z"
+    },
+    {
+      "id": "ver-2",
+      "documentId": "doc-2",
+      "fileName": "system_backups_log.txt",
+      "fileSize": 2100,
+      "fileType": "txt",
+      "versionNumber": "v1",
+      "uploadedBy": "admin-1",
+      "uploadedByName": "Sarah Jenkins",
+      "fileData": "SYSTEM AUDIT REPORT:\n- Backup storage node: ONLINE\n- Disk utility: 42% utilized\n- SSL Certs updated for all load balance units.\n- Recommendation: Setup multi-disk raid configurations.",
+      "createdAt": "2026-05-25T09:12:00Z"
+    },
+    {
+      "id": "ver-3",
+      "documentId": "doc-3",
+      "fileName": "invoice_AI_12903.txt",
+      "fileSize": 3100,
+      "fileType": "txt",
+      "versionNumber": "v1",
+      "uploadedBy": "admin-1",
+      "uploadedByName": "Mohamed Bangura",
+      "fileData": "INVOICE: #AI-12903\nDATE: April 12, 2026\nAcme Hardware Supplies LLC\nTO: SmartDocs organization Finance Unit.\n- 5x Enterprise Workstations - $7,500.00\n- 3x IPS Developer Monitors - $1,200.00\nTOTAL: $8,700.00\nPAID on May 1st 2026.",
+      "createdAt": "2026-04-15T11:00:00Z"
+    },
+    {
+      "id": "ver-1780395559538",
+      "documentId": "doc-1780395559538",
+      "fileName": "logs.1780370912820.log",
+      "fileSize": 12941,
+      "fileType": "application/octet-stream",
+      "versionNumber": "v1",
+      "uploadedBy": "admin-1",
+      "uploadedByName": "Mohamed Bangura",
+      "fileData": "MjAyNi0wNi0wMlQwMzoyNToxNC41NTI2OTQzNzZaIFtpbmZdICBzY2hlZHVsaW5nIGJ1aWxkIG9uIE1ldGFsIGJ1aWxkZXIgImJ1aWxkZXItY2J1eGt0IgoyMDI2LTA2LTAyVDAzOjI1OjE1LjYyOTY4NzYyN1ogW2luZl0gIHVucGFja2luZyBhcmNoaXZlCjIwMjYtMDYtMDJUMDM6MjU6MTUuNzM3OTkzMjMyWiBbaW5mXSAgdXNpbmcgYnVpbGQgZHJpdmVyIG5peHBhY2tzLXYxLjQxLjAKMjAyNi0wNi0wMlQwMzoyNToxNS43NDc0ODQ0MTRaIFtpbmZdICB1cGxvYWRpbmcgc25hcHNob3QKMjAyNi0wNi0wMlQwMzoyNToxNS44Njc2MDM5MjVaIFtpbmZdICAKMjAyNi0wNi0wMlQwMzoyNToxNS44Njc2MTMyMjlaIFtpbmZdICDilZTilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZAgTml4cGFja3MgdjEuNDEuMCDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZcKMjAyNi0wNi0wMlQwMzoyNToxNS44Njc2MTY5NTRaIFtpbmZdICDilZEgc2V0dXAgICAgICDilIIgbm9kZWpzXzI0LCBucG0tOV94ICAgICAgICAgICAgICAgICAgICAgICAgICAgIOKVkQoyMDI2LTA2LTAyVDAzOjI1OjE1Ljg2NzYyMjEzMlogW2luZl0gIOKVkeKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKVkQoyMDI2LTA2LTAyVDAzOjI1OjE1Ljg2NzYyMzA1M1ogW2luZl0gIOKVkSBjYWRkeSAgICAgIOKUgiBwa2dzOiBjYWRkeSAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg4pWRCjIwMjYtMDYtMDJUMDM6MjU6MTUuODY3NjIzODY1WiBbaW5mXSAg4pWRICAgICAgICAgICAg4pSCIGNtZHM6IGNhZGR5IGZtdCAtLW92ZXJ3cml0ZSAvYXNzZXRzL0NhZGR5ZmlsZSDilZEKMjAyNi0wNi0wMlQwMzoyNToxNS44Njc2MjQ5ODZaIFtpbmZdICDilZHilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilZEKMjAyNi0wNi0wMlQwMzoyNToxNS44Njc2MjU2NzdaIFtpbmZdICDilZEgaW5zdGFsbCAgICDilIIgbnBtIGNpICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIOKVkQoyMDI2LTA2LTAyVDAzOjI1OjE1Ljg2NzYyNjYzOVogW2luZl0gIOKVkeKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKVkQoyMDI2LTA2LTAyVDAzOjI1OjE1Ljg2NzYyNzE1OVogW2luZl0gIOKVkSBidWlsZCAgICAgIOKUgiBucG0gcnVuIGJ1aWxkICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg4pWRCjIwMjYtMDYtMDJUMDM6MjU6MTUuODY3NjI4MjQxWiBbaW5mXSAg4pWR4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pWRCjIwMjYtMDYtMDJUMDM6MjU6MTUuODY3NjI4NzkyWiBbaW5mXSAg4pWRIHN0YXJ0ICAgICAg4pSCIG5vZGUgZGlzdC9zZXJ2ZXIubWpzICAgICAgICAgICAgICAgICAgICAgICAgICDilZEKMjAyNi0wNi0wMlQwMzoyNToxNS44Njc2Mjk4NTRaIFtpbmZdICDilZrilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZ0KMjAyNi0wNi0wMlQwMzoyNToxNS44Njc2MzAzNDRaIFtpbmZdICAKMjAyNi0wNi0wMlQwMzoyNToxNS44ODY5MTc3ODdaIFtpbmZdICAKMjAyNi0wNi0wMlQwMzoyNToxNS44ODY5MjI5OTVaIFtpbmZdICBTYXZlZCBvdXRwdXQgdG86CjIwMjYtMDYtMDJUMDM6MjU6MTUuODg2OTI1MjU5WiBbaW5mXSAgICBzbmFwc2hvdC10YXJnZXQtdW5wYWNrCjIwMjYtMDYtMDJUMDM6MjU6MTUuOTk2ODkyMDA0WiBbaW5mXSAgW2ludGVybmFsXSBsb2FkIGJ1aWxkIGRlZmluaXRpb24gZnJvbSBEb2NrZXJmaWxlCjIwMjYtMDYtMDJUMDM6MjU6MTUuOTk3MTY3NDI3WiBbaW5mXSAgW2ludGVybmFsXSBsb2FkIGJ1aWxkIGRlZmluaXRpb24gZnJvbSBEb2NrZXJmaWxlCjIwMjYtMDYtMDJUMDM6MjU6MTUuOTk3MzIxNzk5WiBbaW5mXSAgW2ludGVybmFsXSBsb2FkIGJ1aWxkIGRlZmluaXRpb24gZnJvbSBEb2NrZXJmaWxlCjIwMjYtMDYtMDJUMDM6MjU6MTYuMjMzNjM0MzYxWiBbaW5mXSAgW2ludGVybmFsXSBsb2FkIGJ1aWxkIGRlZmluaXRpb24gZnJvbSBEb2NrZXJmaWxlCjIwMjYtMDYtMDJUMDM6MjU6MTYuMzA0NDQ2NTYwWiBbaW5mXSAgW2ludGVybmFsXSBsb2FkIG1ldGFkYXRhIGZvciBnaGNyLmlvL3JhaWx3YXlhcHAvbml4cGFja3M6dWJ1bnR1LTE3NDU4ODUwNjcKMjAyNi0wNi0wMlQwMzoyNToxNi42MTkwMDA4MDNaIFtpbmZdICBbaW50ZXJuYWxdIGxvYWQgbWV0YWRhdGEgZm9yIGdoY3IuaW8vcmFpbHdheWFwcC9uaXhwYWNrczp1YnVudHUtMTc0NTg4NTA2NwoyMDI2LTA2LTAyVDAzOjI1OjE2LjYxOTczMTQ3OVogW2luZl0gIFtpbnRlcm5hbF0gbG9hZCAuZG9ja2VyaWdub3JlCjIwMjYtMDYtMDJUMDM6MjU6MTYuNjE5OTA3MzcyWiBbaW5mXSAgW2ludGVybmFsXSBsb2FkIC5kb2NrZXJpZ25vcmUKMjAyNi0wNi0wMlQwMzoyNToxNi42MTk5NjUxNzlaIFtpbmZdICBbaW50ZXJuYWxdIGxvYWQgLmRvY2tlcmlnbm9yZQoyMDI2LTA2LTAyVDAzOjI1OjE2LjgzNTkwMDE3M1ogW2luZl0gIFtpbnRlcm5hbF0gbG9hZCAuZG9ja2VyaWdub3JlCjIwMjYtMDYtMDJUMDM6MjU6MTYuOTUzODc4OTEzWiBbd3JuXSAgU2VjcmV0c1VzZWRJbkFyZ09yRW52OiBEbyBub3QgdXNlIEFSRyBvciBFTlYgaW5zdHJ1Y3Rpb25zIGZvciBzZW5zaXRpdmUgZGF0YSAoQVJHICJHRU1JTklfQVBJX0tFWSIpIChsaW5lIDEzKShodHRwczovL2RvY3MuZG9ja2VyLmNvbS9nby9kb2NrZXJmaWxlL3J1bGUvc2VjcmV0cy11c2VkLWluLWFyZy1vci1lbnYvKQogZGV0YWlsczogU2Vuc2l0aXZlIGRhdGEgc2hvdWxkIG5vdCBiZSB1c2VkIGluIHRoZSBBUkcgb3IgRU5WIGNvbW1hbmRzCgoyMDI2LTA2LTAyVDAzOjI1OjE2Ljk1Mzg5NjA1OVogW3dybl0gIFNlY3JldHNVc2VkSW5BcmdPckVudjogRG8gbm90IHVzZSBBUkcgb3IgRU5WIGluc3RydWN0aW9ucyBmb3Igc2Vuc2l0aXZlIGRhdGEgKEFSRyAiU1VQQUJBU0VfU0VSVklDRV9ST0xFX0tFWSIpIChsaW5lIDEzKShodHRwczovL2RvY3MuZG9ja2VyLmNvbS9nby9kb2NrZXJmaWxlL3J1bGUvc2VjcmV0cy11c2VkLWluLWFyZy1vci1lbnYvKQogZGV0YWlsczogU2Vuc2l0aXZlIGRhdGEgc2hvdWxkIG5vdCBiZSB1c2VkIGluIHRoZSBBUkcgb3IgRU5WIGNvbW1hbmRzCgoyMDI2LTA2LTAyVDAzOjI1OjE2Ljk1NDUxMDQ2MFogW3dybl0gIFNlY3JldHNVc2VkSW5BcmdPckVudjogRG8gbm90IHVzZSBBUkcgb3IgRU5WIGluc3RydWN0aW9ucyBmb3Igc2Vuc2l0aXZlIGRhdGEgKEVOViAiR0VNSU5JX0FQSV9LRVkiKSAobGluZSAxNCkoaHR0cHM6Ly9kb2NzLmRvY2tlci5jb20vZ28vZG9ja2VyZmlsZS9ydWxlL3NlY3JldHMtdXNlZC1pbi1hcmctb3ItZW52LykKIGRldGFpbHM6IFNlbnNpdGl2ZSBkYXRhIHNob3VsZCBub3QgYmUgdXNlZCBpbiB0aGUgQVJHIG9yIEVOViBjb21tYW5kcwoKMjAyNi0wNi0wMlQwMzoyNToxNi45NTQ1MTIzOTNaIFt3cm5dICBTZWNyZXRzVXNlZEluQXJnT3JFbnY6IERvIG5vdCB1c2UgQVJHIG9yIEVOViBpbnN0cnVjdGlvbnMgZm9yIHNlbnNpdGl2ZSBkYXRhIChFTlYgIlNVUEFCQVNFX1NFUlZJQ0VfUk9MRV9LRVkiKSAobGluZSAxNCkoaHR0cHM6Ly9kb2NzLmRvY2tlci5jb20vZ28vZG9ja2VyZmlsZS9ydWxlL3NlY3JldHMtdXNlZC1pbi1hcmctb3ItZW52LykKIGRldGFpbHM6IFNlbnNpdGl2ZSBkYXRhIHNob3VsZCBub3QgYmUgdXNlZCBpbiB0aGUgQVJHIG9yIEVOViBjb21tYW5kcwoKMjAyNi0wNi0wMlQwMzoyNToxNi45NTQ1MzQ4OTdaIFt3cm5dICBVbmRlZmluZWRWYXI6IFVzYWdlIG9mIHVuZGVmaW5lZCB2YXJpYWJsZSAnJE5JWFBBQ0tTX1BBVEgnIChsaW5lIDI0KShodHRwczovL2RvY3MuZG9ja2VyLmNvbS9nby9kb2NrZXJmaWxlL3J1bGUvdW5kZWZpbmVkLXZhci8pCiBkZXRhaWxzOiBWYXJpYWJsZXMgc2hvdWxkIGJlIGRlZmluZWQgYmVmb3JlIHRoZWlyIHVzZQoKMjAyNi0wNi0wMlQwMzoyNToxNi45NTkyOTY1MDdaIFtpbmZdICBbc3RhZ2UtMCAxMS8xNV0gUlVOIC0tbW91bnQ9dHlwZT1jYWNoZSxpZD1zLzcxZTI0ZDg0LTRhMmMtNDViYS04MmI4LTUyOTdhM2U3ZTg2Ni0vcm9vdC9ucG0sdGFyZ2V0PS9yb290Ly5ucG0gbnBtIGNpCjIwMjYtMDYtMDJUMDM6MjU6MTYuOTU5Mjk4MDk5WiBbaW5mXSAgW3N0YWdlLTAgMTAvMTVdIENPUFkgLiAvYXBwLy4KMjAyNi0wNi0wMlQwMzoyNToxNi45NTkyOTg2ODBaIFtpbmZdICBbc3RhZ2UtMCAgOS8xNV0gUlVOICBjYWRkeSBmbXQgLS1vdmVyd3JpdGUgL2Fzc2V0cy9DYWRkeWZpbGUKMjAyNi0wNi0wMlQwMzoyNToxNi45NTkyOTkxMjFaIFtpbmZdICBbc3RhZ2UtMCAgNi8xNV0gUlVOIG5peC1lbnYgLWlmIC5uaXhwYWNrcy9uaXhwa2dzLWJhOTEzZWRhMmRmOGViNzIxNDcyNTkxODlkNTU5MzIwMTJkZjYzMDEubml4ICYmIG5peC1jb2xsZWN0LWdhcmJhZ2UgLWQKMjAyNi0wNi0wMlQwMzoyNToxNi45NTkyOTk1ODJaIFtpbmZdICBbc3RhZ2UtMCAgNy8xNV0gQ09QWSAubml4cGFja3MvYXNzZXRzIC9hc3NldHMvCjIwMjYtMDYtMDJUMDM6MjU6MTYuOTU5MzAzMzA3WiBbaW5mXSAgW3N0YWdlLTAgMTMvMTVdIFJVTiAtLW1vdW50PXR5cGU9Y2FjaGUsaWQ9cy83MWUyNGQ4NC00YTJjLTQ1YmEtODJiOC01Mjk3YTNlN2U4NjYtbm9kZV9tb2R1bGVzL2NhY2hlLHRhcmdldD0vYXBwL25vZGVfbW9kdWxlcy8uY2FjaGUgbnBtIHJ1biBidWlsZAoyMDI2LTA2LTAyVDAzOjI1OjE2Ljk1OTMwMzY0OFogW2luZl0gIFtzdGFnZS0wIDE1LzE1XSBDT1BZIC4gL2FwcAoyMDI2LTA2LTAyVDAzOjI1OjE2Ljk1OTMwMzk5OVogW2luZl0gIFtzdGFnZS0wICA0LzE1XSBSVU4gbml4LWVudiAtaWYgLm5peHBhY2tzL25peHBrZ3MtMjNmOTE2OWM0Y2NjZTUyMTM3OWU2MDJjYzgyZWQ4NzNhMWYxYjUyYi5uaXggJiYgbml4LWNvbGxlY3QtZ2FyYmFnZSAtZAoyMDI2LTA2LTAyVDAzOjI1OjE2Ljk1OTMwNDQ1OVogW2luZl0gIFtzdGFnZS0wICAzLzE1XSBDT1BZIC5uaXhwYWNrcy9uaXhwa2dzLTIzZjkxNjljNGNjY2U1MjEzNzllNjAyY2M4MmVkODczYTFmMWI1MmIubml4IC5uaXhwYWNrcy9uaXhwa2dzLTIzZjkxNjljNGNjY2U1MjEzNzllNjAyY2M4MmVkODczYTFmMWI1MmIubml4CjIwMjYtMDYtMDJUMDM6MjU6MTYuOTU5MzA0OTMwWiBbaW5mXSAgW2ludGVybmFsXSBsb2FkIGJ1aWxkIGNvbnRleHQKMjAyNi0wNi0wMlQwMzoyNToxNi45NTkzMDU0MTBaIFtpbmZdICBbc3RhZ2UtMCAgMi8xNV0gV09SS0RJUiAvYXBwLwoyMDI2LTA2LTAyVDAzOjI1OjE2Ljk1OTMwNTg3MVogW2luZl0gIFtzdGFnZS0wIDEyLzE1XSBDT1BZIC4gL2FwcC8uCjIwMjYtMDYtMDJUMDM6MjU6MTYuOTU5MzA2MjQyWiBbaW5mXSAgW3N0YWdlLTAgMTQvMTVdIFJVTiBwcmludGYgJ1xuUEFUSD0vYXBwL25vZGVfbW9kdWxlcy8uYmluOiRQQVRIJyA+PiAvcm9vdC8ucHJvZmlsZQoyMDI2LTA2LTAyVDAzOjI1OjE2Ljk1OTMwNjc3M1ogW2luZl0gIFtzdGFnZS0wICA1LzE1XSBDT1BZIC5uaXhwYWNrcy9uaXhwa2dzLWJhOTEzZWRhMmRmOGViNzIxNDcyNTkxODlkNTU5MzIwMTJkZjYzMDEubml4IC5uaXhwYWNrcy9uaXhwa2dzLWJhOTEzZWRhMmRmOGViNzIxNDcyNTkxODlkNTU5MzIwMTJkZjYzMDEubml4CjIwMjYtMDYtMDJUMDM6MjU6MTYuOTU5MzA3MjAzWiBbaW5mXSAgW3N0YWdlLTAgIDEvMTVdIEZST00gZ2hjci5pby9yYWlsd2F5YXBwL25peHBhY2tzOnVidW50dS0xNzQ1ODg1MDY3QHNoYTI1NjpkNDVjODlkODBlMTNkN2FkMGZkNTU1YjUxMzBmMjJhODY2ZDlkZDEwZTg2MWY1ODk5MzIzMDNlZjIzMTRjN2RlCjIwMjYtMDYtMDJUMDM6MjU6MTYuOTU5MzA3NTM0WiBbaW5mXSAgW3N0YWdlLTAgIDgvMTVdIENPUFkgLiAvYXBwLy4KMjAyNi0wNi0wMlQwMzoyNToxNi45NTk1NjE5MzVaIFtpbmZdICBbaW50ZXJuYWxdIGxvYWQgYnVpbGQgY29udGV4dAoyMDI2LTA2LTAyVDAzOjI1OjE2Ljk1OTgyMDUyM1ogW2luZl0gIFtzdGFnZS0wICAxLzE1XSBGUk9NIGdoY3IuaW8vcmFpbHdheWFwcC9uaXhwYWNrczp1YnVudHUtMTc0NTg4NTA2N0BzaGEyNTY6ZDQ1Yzg5ZDgwZTEzZDdhZDBmZDU1NWI1MTMwZjIyYTg2NmQ5ZGQxMGU4NjFmNTg5OTMyMzAzZWYyMzE0YzdkZQoyMDI2LTA2LTAyVDAzOjI1OjE2Ljk1OTk1MjkxMlogW2luZl0gIFtpbnRlcm5hbF0gbG9hZCBidWlsZCBjb250ZXh0CjIwMjYtMDYtMDJUMDM6MjU6MTcuMDM0Mzg2OTEyWiBbaW5mXSAgW3N0YWdlLTAgIDEvMTVdIEZST00gZ2hjci5pby9yYWlsd2F5YXBwL25peHBhY2tzOnVidW50dS0xNzQ1ODg1MDY3QHNoYTI1NjpkNDVjODlkODBlMTNkN2FkMGZkNTU1YjUxMzBmMjJhODY2ZDlkZDEwZTg2MWY1ODk5MzIzMDNlZjIzMTRjN2RlCjIwMjYtMDYtMDJUMDM6MjU6MTcuMjIxMzIwNTI2WiBbaW5mXSAgW2ludGVybmFsXSBsb2FkIGJ1aWxkIGNvbnRleHQKMjAyNi0wNi0wMlQwMzoyNToxNy40MDU2NTU1MTNaIFtpbmZdICBbc3RhZ2UtMCAgMi8xNV0gV09SS0RJUiAvYXBwLwoyMDI2LTA2LTAyVDAzOjI1OjE3LjQwNTY1Njc1NVogW2luZl0gIFtzdGFnZS0wICAzLzE1XSBDT1BZIC5uaXhwYWNrcy9uaXhwa2dzLTIzZjkxNjljNGNjY2U1MjEzNzllNjAyY2M4MmVkODczYTFmMWI1MmIubml4IC5uaXhwYWNrcy9uaXhwa2dzLTIzZjkxNjljNGNjY2U1MjEzNzllNjAyY2M4MmVkODczYTFmMWI1MmIubml4CjIwMjYtMDYtMDJUMDM6MjU6MTcuNDA1NjU3MDM1WiBbaW5mXSAgW3N0YWdlLTAgIDQvMTVdIFJVTiBuaXgtZW52IC1pZiAubml4cGFja3Mvbml4cGtncy0yM2Y5MTY5YzRjY2NlNTIxMzc5ZTYwMmNjODJlZDg3M2ExZjFiNTJiLm5peCAmJiBuaXgtY29sbGVjdC1nYXJiYWdlIC1kCjIwMjYtMDYtMDJUMDM6MjU6MTcuNDA1NjU3Mjk2WiBbaW5mXSAgW3N0YWdlLTAgIDUvMTVdIENPUFkgLm5peHBhY2tzL25peHBrZ3MtYmE5MTNlZGEyZGY4ZWI3MjE0NzI1OTE4OWQ1NTkzMjAxMmRmNjMwMS5uaXggLm5peHBhY2tzL25peHBrZ3MtYmE5MTNlZGEyZGY4ZWI3MjE0NzI1OTE4OWQ1NTkzMjAxMmRmNjMwMS5uaXgKMjAyNi0wNi0wMlQwMzoyNToxNy40MDU2NTc1MzZaIFtpbmZdICBbc3RhZ2UtMCAgNi8xNV0gUlVOIG5peC1lbnYgLWlmIC5uaXhwYWNrcy9uaXhwa2dzLWJhOTEzZWRhMmRmOGViNzIxNDcyNTkxODlkNTU5MzIwMTJkZjYzMDEubml4ICYmIG5peC1jb2xsZWN0LWdhcmJhZ2UgLWQKMjAyNi0wNi0wMlQwMzoyNToxNy40MDU2NTc3NzdaIFtpbmZdICBbc3RhZ2UtMCAgNy8xNV0gQ09QWSAubml4cGFja3MvYXNzZXRzIC9hc3NldHMvCjIwMjYtMDYtMDJUMDM6MjU6MTcuNDA1NjY2OTQxWiBbaW5mXSAgW3N0YWdlLTAgIDcvMTVdIENPUFkgLm5peHBhY2tzL2Fzc2V0cyAvYXNzZXRzLwoyMDI2LTA2LTAyVDAzOjI1OjE3LjQwNTgwMzc4NlogW2luZl0gIFtzdGFnZS0wICA4LzE1XSBDT1BZIC4gL2FwcC8uCjIwMjYtMDYtMDJUMDM6MjU6MTguODEzNTk5NzM0WiBbaW5mXSAgW3N0YWdlLTAgIDgvMTVdIENPUFkgLiAvYXBwLy4KMjAyNi0wNi0wMlQwMzoyNToxOC44ODQ5MjMwOTBaIFtpbmZdICBbc3RhZ2UtMCAgOS8xNV0gUlVOICBjYWRkeSBmbXQgLS1vdmVyd3JpdGUgL2Fzc2V0cy9DYWRkeWZpbGUKMjAyNi0wNi0wMlQwMzoyNToyMC44ODM5Mzc0MDRaIFtpbmZdICBbc3RhZ2UtMCAgOS8xNV0gUlVOICBjYWRkeSBmbXQgLS1vdmVyd3JpdGUgL2Fzc2V0cy9DYWRkeWZpbGUKMjAyNi0wNi0wMlQwMzoyNToyMC45MjcyMTQ1NjJaIFtpbmZdICBbc3RhZ2UtMCAxMC8xNV0gQ09QWSAuIC9hcHAvLgoyMDI2LTA2LTAyVDAzOjI1OjIxLjQzMTQ5MDgyMFogW2luZl0gIFtzdGFnZS0wIDEwLzE1XSBDT1BZIC4gL2FwcC8uCjIwMjYtMDYtMDJUMDM6MjU6MjEuNDc1MjMxMjQzWiBbaW5mXSAgW3N0YWdlLTAgMTEvMTVdIFJVTiAtLW1vdW50PXR5cGU9Y2FjaGUsaWQ9cy83MWUyNGQ4NC00YTJjLTQ1YmEtODJiOC01Mjk3YTNlN2U4NjYtL3Jvb3QvbnBtLHRhcmdldD0vcm9vdC8ubnBtIG5wbSBjaQoyMDI2LTA2LTAyVDAzOjI1OjIyLjc1NTkzMTM4WiBbaW5mXSAgbnBtIHdhcm4gY29uZmlnIHByb2R1Y3Rpb24gVXNlIGAtLW9taXQ9ZGV2YCBpbnN0ZWFkLgoKMjAyNi0wNi0wMlQwMzoyNToyNS4wNTYwNDY3MzJaIFtpbmZdICBucG0gd2FybiBkZXByZWNhdGVkIG5vZGUtZG9tZXhjZXB0aW9uQDEuMC4wOiBVc2UgeW91ciBwbGF0Zm9ybSdzIG5hdGl2ZSBET01FeGNlcHRpb24gaW5zdGVhZAoKMjAyNi0wNi0wMlQwMzoyNToyNy44OTA0MDExMzVaIFtpbmZdICAKYWRkZWQgMzE4IHBhY2thZ2VzLCBhbmQgYXVkaXRlZCAzMTkgcGFja2FnZXMgaW4gNXMKCjIwMjYtMDYtMDJUMDM6MjU6MjcuODkwNDgyNzE4WiBbaW5mXSAgCjIwMjYtMDYtMDJUMDM6MjU6MjcuODkwNTM5NjIzWiBbaW5mXSAgNDQgcGFja2FnZXMgYXJlIGxvb2tpbmcgZm9yIGZ1bmRpbmcKCjIwMjYtMDYtMDJUMDM6MjU6MjcuODkwNjM3OTZaIFtpbmZdICAgIHJ1biBgbnBtIGZ1bmRgIGZvciBkZXRhaWxzCgoyMDI2LTA2LTAyVDAzOjI1OjI3Ljg5MTczNzU4WiBbaW5mXSAgCmZvdW5kIDAgdnVsbmVyYWJpbGl0aWVzCgoyMDI2LTA2LTAyVDAzOjI1OjMwLjc4NjQ5MDcyNlogW2luZl0gIFtzdGFnZS0wIDExLzE1XSBSVU4gLS1tb3VudD10eXBlPWNhY2hlLGlkPXMvNzFlMjRkODQtNGEyYy00NWJhLTgyYjgtNTI5N2EzZTdlODY2LS9yb290L25wbSx0YXJnZXQ9L3Jvb3QvLm5wbSBucG0gY2kKMjAyNi0wNi0wMlQwMzoyNTozMC44MjQxNTcwOTBaIFtpbmZdICBbc3RhZ2UtMCAxMi8xNV0gQ09QWSAuIC9hcHAvLgoyMDI2LTA2LTAyVDAzOjI1OjMxLjg0MTI3MTkyNlogW2luZl0gIFtzdGFnZS0wIDEyLzE1XSBDT1BZIC4gL2FwcC8uCjIwMjYtMDYtMDJUMDM6MjU6MzEuODg0NjQ4MzAzWiBbaW5mXSAgW3N0YWdlLTAgMTMvMTVdIFJVTiAtLW1vdW50PXR5cGU9Y2FjaGUsaWQ9cy83MWUyNGQ4NC00YTJjLTQ1YmEtODJiOC01Mjk3YTNlN2U4NjYtbm9kZV9tb2R1bGVzL2NhY2hlLHRhcmdldD0vYXBwL25vZGVfbW9kdWxlcy8uY2FjaGUgbnBtIHJ1biBidWlsZAoyMDI2LTA2LTAyVDAzOjI1OjMyLjM5MjkxMDU2OVogW2luZl0gIG5wbSB3YXJuIGNvbmZpZyBwcm9kdWN0aW9uIFVzZSBgLS1vbWl0PWRldmAgaW5zdGVhZC4KCjIwMjYtMDYtMDJUMDM6MjU6MzIuNDE0NjIxNjA2WiBbaW5mXSAgCj4gcmVhY3QtZXhhbXBsZUAwLjAuMCBidWlsZAo+IHZpdGUgYnVpbGQgJiYgZXNidWlsZCBzZXJ2ZXIudHMgLS1idW5kbGUgLS1wbGF0Zm9ybT1ub2RlIC0tZm9ybWF0PWVzbSAtLXBhY2thZ2VzPWV4dGVybmFsIC0tc291cmNlbWFwIC0tb3V0ZmlsZT1kaXN0L3NlcnZlci5tanMKCgoyMDI2LTA2LTAyVDAzOjI1OjMzLjAxMzQyOTI5M1ogW2luZl0gIBtbMzZtdml0ZSB2Ni40LjMgG1szMm1idWlsZGluZyBmb3IgcHJvZHVjdGlvbi4uLhtbMzZtG1szOW0KCjIwMjYtMDYtMDJUMDM6MjU6MzMuMTA4Mjc1MDczWiBbaW5mXSAgdHJhbnNmb3JtaW5nLi4uCgoyMDI2LTA2LTAyVDAzOjI1OjM1LjEyMzI4MzQwMlogW2luZl0gIBtbMzJt4pyTG1szOW0gMTY3NCBtb2R1bGVzIHRyYW5zZm9ybWVkLgoKMjAyNi0wNi0wMlQwMzoyNTozNS4zMjY5MDYwNDJaIFtpbmZdICByZW5kZXJpbmcgY2h1bmtzLi4uCgoyMDI2LTA2LTAyVDAzOjI1OjM1LjMzOTc3MDEyM1ogW2luZl0gIGNvbXB1dGluZyBnemlwIHNpemUuLi4KCjIwMjYtMDYtMDJUMDM6MjU6MzUuMzY1NTI3NDY5WiBbaW5mXSAgG1sybWRpc3QvG1syMm0bWzMybWluZGV4Lmh0bWwgICAgICAgICAgICAgICAgIBtbMzltG1sxbRtbMm0gIDAuNDEga0IbWzIybRtbMW0bWzIybRtbMm0g4pSCIGd6aXA6ICAwLjI4IGtCG1syMm0KG1sybWRpc3QvG1syMm0bWzJtYXNzZXRzLxtbMjJtG1szNW1pbmRleC1DWXdzY0JuTy5jc3MgIBtbMzltG1sxbRtbMm0gMzkuMDYga0IbWzIybRtbMW0bWzIybRtbMm0g4pSCIGd6aXA6ICA3LjI3IGtCG1syMm0KCjIwMjYtMDYtMDJUMDM6MjU6MzUuMzY1NTcxNjg1WiBbaW5mXSAgG1sybWRpc3QvG1syMm0bWzJtYXNzZXRzLxtbMjJtG1szNm1pbmRleC1tbXlNS0EzVS5qcyAgIBtbMzltG1sxbRtbMm0yODMuMzQga0IbWzIybRtbMW0bWzIybRtbMm0g4pSCIGd6aXA6IDc5LjkxIGtCG1syMm0KCjIwMjYtMDYtMDJUMDM6MjU6MzUuMzY2MDg0NjA0WiBbaW5mXSAgG1szMm3inJMgYnVpbHQgaW4gMi4zMXMbWzM5bQoKMjAyNi0wNi0wMlQwMzoyNTozNS40NDgyMDE5NjdaIFtpbmZdICAKICBkaXN0L3NlcnZlci5tanMgICAgICAgNTUuOWtiCiAgZGlzdC9zZXJ2ZXIubWpzLm1hcCAgMTA2LjFrYgoK4pqhIERvbmUgaW4gMTFtcwoKMjAyNi0wNi0wMlQwMzoyNTozNS42NDczNTIxMjFaIFtpbmZdICBbc3RhZ2UtMCAxMy8xNV0gUlVOIC0tbW91bnQ9dHlwZT1jYWNoZSxpZD1zLzcxZTI0ZDg0LTRhMmMtNDViYS04MmI4LTUyOTdhM2U3ZTg2Ni1ub2RlX21vZHVsZXMvY2FjaGUsdGFyZ2V0PS9hcHAvbm9kZV9tb2R1bGVzLy5jYWNoZSBucG0gcnVuIGJ1aWxkCjIwMjYtMDYtMDJUMDM6MjU6MzUuNjkxMjU0Mzk2WiBbaW5mXSAgW3N0YWdlLTAgMTQvMTVdIFJVTiBwcmludGYgJ1xuUEFUSD0vYXBwL25vZGVfbW9kdWxlcy8uYmluOiRQQVRIJyA+PiAvcm9vdC8ucHJvZmlsZQoyMDI2LTA2LTAyVDAzOjI1OjM2LjE0OTczNTY4MVogW2luZl0gIFtzdGFnZS0wIDE0LzE1XSBSVU4gcHJpbnRmICdcblBBVEg9L2FwcC9ub2RlX21vZHVsZXMvLmJpbjokUEFUSCcgPj4gL3Jvb3QvLnByb2ZpbGUKMjAyNi0wNi0wMlQwMzoyNTozNi4xOTIwMzM0MzBaIFtpbmZdICBbc3RhZ2UtMCAxNS8xNV0gQ09QWSAuIC9hcHAKMjAyNi0wNi0wMlQwMzoyNTozNi41OTkxNzkxMjJaIFtpbmZdICBbc3RhZ2UtMCAxNS8xNV0gQ09QWSAuIC9hcHAKMjAyNi0wNi0wMlQwMzoyNTozNi42NjM2Njg1NDBaIFtpbmZdICBleHBvcnRpbmcgdG8gZG9ja2VyIGltYWdlIGZvcm1hdAoyMDI2LTA2LTAyVDAzOjI1OjQxLjQ4NzI4NTMxM1ogW2luZl0gIGV4cG9ydGluZyB0byBkb2NrZXIgaW1hZ2UgZm9ybWF0CjIwMjYtMDYtMDJUMDM6MjU6NDEuNTk0NjEyMDQ5WiBbaW5mXSAgY29udGFpbmVyaW1hZ2UuZGVzY3JpcHRvcjogZXlKdFpXUnBZVlI1Y0dVaU9pSmhjSEJzYVdOaGRHbHZiaTkyYm1RdWIyTnBMbWx0WVdkbExtMWhibWxtWlhOMExuWXhLMnB6YjI0aUxDSmthV2RsYzNRaU9pSnphR0V5TlRZNk16aGpOR0V3WldFeU5HSTVaREV5WXpkak1URXdZek0xWWpGak1EUTRPR1prTmpaaFlUVm1NMk15TVRBM1pHVm1ZVGMzT1dFMllURTROMlV6T1RrNU9DSXNJbk5wZW1VaU9qTTNNRGNzSW1GdWJtOTBZWFJwYjI1eklqcDdJbTl5Wnk1dmNHVnVZMjl1ZEdGcGJtVnljeTVwYldGblpTNWpjbVZoZEdWa0lqb2lNakF5Tmkwd05pMHdNbFF3TXpveU5Ub3pPRm9pZlN3aWNHeGhkR1p2Y20waU9uc2lZWEpqYUdsMFpXTjBkWEpsSWpvaVlXMWtOalFpTENKdmN5STZJbXhwYm5WNEluMTkKMjAyNi0wNi0wMlQwMzoyNTo0MS41OTQ2MTY5ODZaIFtpbmZdICBjb250YWluZXJpbWFnZS5jb25maWcuZGlnZXN0OiBzaGEyNTY6NmE5ZTM1MDU1ZmE3MWYyNjdlMWU0YzNlM2FkOTA3NjA4ZDEzZWIzYTIwNjNkOWY2M2UzOTcwOWNhNzFkNTE0ZAoyMDI2LTA2LTAyVDAzOjI1OjQxLjU5NDYyMDYxMlogW2luZl0gIGNvbnRhaW5lcmltYWdlLmRpZ2VzdDogc2hhMjU2OjM4YzRhMGVhMjRiOWQxMmM3YzExMGMzNWIxYzA0ODhmZDY2YWE1ZjNjMjEwN2RlZmE3NzlhNmExODdlMzk5OTgKMjAyNi0wNi0wMlQwMzoyNTo1NS42MzY1ODE5MDNaIFtpbmZdICBpbWFnZSBwdXNoCjIwMjYtMDYtMDJUMDM6MjU6NTUuNjM2NjYxMzQzWiBbaW5mXSAgaW1hZ2UgcHVzaAoyMDI2LTA2LTAyVDAzOjI2OjMzLjEyNTIyNDQ3MlogW2luZl0gIAoyMDI2LTA2LTAyVDAzOjI2OjMzLjEyNTIyODM0NFogW2luZl0gIBtbMzVtPT09PT09PT09PT09PT09PT09PT0KU3RhcnRpbmcgSGVhbHRoY2hlY2sKPT09PT09PT09PT09PT09PT09PT0KG1swbQoyMDI2LTA2LTAyVDAzOjI2OjMzLjEyNTIyOTQxMlogW2luZl0gIBtbMzdtUGF0aDogL2FwaS9oZWFsdGgbWzBtCjIwMjYtMDYtMDJUMDM6MjY6MzMuMTI1MjMwNTMzWiBbaW5mXSAgG1szN21SZXRyeSB3aW5kb3c6IDFtNDBzG1swbQoyMDI2LTA2LTAyVDAzOjI2OjMzLjEyNTIzMTM5N1ogW2luZl0gIAoyMDI2LTA2LTAyVDAzOjI2OjM0LjM1NDk1NDY5NlogW2luZl0gIBtbOTJtWzEvMV0gSGVhbHRoY2hlY2sgc3VjY2VlZGVkIRtbMG0=",
+      "createdAt": "2026-06-02T10:19:19.538Z"
+    }
+  ],
+  "logs": [
+    {
+      "id": "log-1780414122155-186",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Admin).",
+      "createdAt": "2026-06-02T15:28:42.155Z"
+    },
+    {
+      "id": "log-1780414122149-585",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Admin).",
+      "createdAt": "2026-06-02T15:28:42.149Z"
+    },
+    {
+      "id": "log-1780414121925-969",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Admin).",
+      "createdAt": "2026-06-02T15:28:41.925Z"
+    },
+    {
+      "id": "log-1780414121672-136",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Admin).",
+      "createdAt": "2026-06-02T15:28:41.672Z"
+    },
+    {
+      "id": "log-1780413316603-794",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T15:15:16.603Z"
+    },
+    {
+      "id": "log-1780413316318-994",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T15:15:16.318Z"
+    },
+    {
+      "id": "log-1780413311200-968",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T15:15:11.200Z"
+    },
+    {
+      "id": "log-1780413311199-229",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T15:15:11.199Z"
+    },
+    {
+      "id": "log-1780401915762-746",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T12:05:15.762Z"
+    },
+    {
+      "id": "log-1780401915760-509",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T12:05:15.760Z"
+    },
+    {
+      "id": "log-1780399357224-618",
+      "userId": "admin-1",
+      "userName": "Sarah Jenkins",
+      "userRole": "Admin",
+      "action": "Update Institution",
+      "documentTitle": "Agriculture Value Chain Development Project",
+      "details": "Updated institution profile \"Agriculture Value Chain Development Project\" (activity dimension: none).",
+      "createdAt": "2026-06-02T11:22:37.224Z"
+    },
+    {
+      "id": "log-1780399310094-298",
+      "userId": "admin-1",
+      "userName": "Sarah Jenkins",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Sarah Jenkins (Admin).",
+      "createdAt": "2026-06-02T11:21:50.094Z"
+    },
+    {
+      "id": "log-1780399251074-110",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T11:20:51.074Z"
+    },
+    {
+      "id": "log-1780399251071-931",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T11:20:51.071Z"
+    },
+    {
+      "id": "log-1780399250316-460",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T11:20:50.316Z"
+    },
+    {
+      "id": "log-1780399250028-890",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T11:20:50.028Z"
+    },
+    {
+      "id": "log-1780398847583-41",
+      "userId": "admin-1",
+      "userName": "Sarah Jenkins",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Sarah Jenkins (Admin).",
+      "createdAt": "2026-06-02T11:14:07.583Z"
+    },
+    {
+      "id": "log-1780398758540-720",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T11:12:38.540Z"
+    },
+    {
+      "id": "log-1780398758262-247",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T11:12:38.262Z"
+    },
+    {
+      "id": "log-1780398754510-309",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T11:12:34.510Z"
+    },
+    {
+      "id": "log-1780398754509-46",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T11:12:34.509Z"
+    },
+    {
+      "id": "log-1780395559539-100",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Upload",
+      "documentId": "doc-1780395559538",
+      "documentTitle": "logs.1780370912820",
+      "details": "Uploaded first version \"logs.1780370912820.log\" representing \"logs.1780370912820\". AI-OCR detected type: Other. Auto-filed into \"Procurement / General Documents\".",
+      "createdAt": "2026-06-02T10:19:19.539Z"
+    },
+    {
+      "id": "log-1780395183428-880",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T10:13:03.428Z"
+    },
+    {
+      "id": "log-1780395183414-464",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T10:13:03.414Z"
+    },
+    {
+      "id": "log-1780395183411-33",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T10:13:03.411Z"
+    },
+    {
+      "id": "log-1780395183155-717",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T10:13:03.155Z"
+    },
+    {
+      "id": "log-1780394460653-264",
+      "userId": "admin-1",
+      "userName": "Sarah Jenkins",
+      "userRole": "Admin",
+      "action": "Create Folder",
+      "documentTitle": "Oil Palm",
+      "details": "Created a folder: \"Oil Palm\"",
+      "createdAt": "2026-06-02T10:01:00.653Z"
+    },
+    {
+      "id": "log-1780394395037-293",
+      "userId": "admin-1",
+      "userName": "Sarah Jenkins",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Sarah Jenkins (Admin).",
+      "createdAt": "2026-06-02T09:59:55.037Z"
+    },
+    {
+      "id": "log-1780394207875-40",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T09:56:47.875Z"
+    },
+    {
+      "id": "log-1780394207601-943",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T09:56:47.601Z"
+    },
+    {
+      "id": "log-1780394201400-130",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T09:56:41.400Z"
+    },
+    {
+      "id": "log-1780394201399-738",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T09:56:41.399Z"
+    },
+    {
+      "id": "log-1780392933634-791",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T09:35:33.634Z"
+    },
+    {
+      "id": "log-1780392933629-585",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T09:35:33.629Z"
+    },
+    {
+      "id": "log-1780392924730-760",
+      "userId": "admin-1",
+      "userName": "Sarah Jenkins",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Sarah Jenkins (Admin).",
+      "createdAt": "2026-06-02T09:35:24.730Z"
+    },
+    {
+      "id": "log-1780392736275-435",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T09:32:16.275Z"
+    },
+    {
+      "id": "log-1780392736047-511",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T09:32:16.047Z"
+    },
+    {
+      "id": "log-1780387450420-736",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T08:04:10.420Z"
+    },
+    {
+      "id": "log-1780387450120-952",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T08:04:10.120Z"
+    },
+    {
+      "id": "log-1780387447718-628",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T08:04:07.718Z"
+    },
+    {
+      "id": "log-1780387447715-715",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T08:04:07.715Z"
+    },
+    {
+      "id": "log-1780387094813-845",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T07:58:14.813Z"
+    },
+    {
+      "id": "log-1780387094521-384",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T07:58:14.521Z"
+    },
+    {
+      "id": "log-1780378296704-607",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T05:31:36.704Z"
+    },
+    {
+      "id": "log-1780378296699-352",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T05:31:36.699Z"
+    },
+    {
+      "id": "log-1780375736064-976",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T04:48:56.064Z"
+    },
+    {
+      "id": "log-1780375736062-837",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T04:48:56.062Z"
+    },
+    {
+      "id": "log-1780369814074-596",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T03:10:14.074Z"
+    },
+    {
+      "id": "log-1780369813724-524",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-02T03:10:13.724Z"
+    },
+    {
+      "id": "log-1780356338150-418",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-01T23:25:38.150Z"
+    },
+    {
+      "id": "log-1780356337898-550",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-01T23:25:37.898Z"
+    },
+    {
+      "id": "log-1780351747364-816",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-01T22:09:07.364Z"
+    },
+    {
+      "id": "log-1780351732204-765",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-01T22:08:52.204Z"
+    },
+    {
+      "id": "log-1780351717272-272",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-01T22:08:37.272Z"
+    },
+    {
+      "id": "log-1780351717270-26",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Login",
+      "details": "User switched profile to Mohamed Bangura (Staff).",
+      "createdAt": "2026-06-01T22:08:37.270Z"
+    },
+    {
+      "id": "log-1",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Upload",
+      "documentId": "doc-1",
+      "documentTitle": "Supplier Supply Chain Agreement 2026",
+      "details": "Uploaded v1 version of document into Contracts folder.",
+      "createdAt": "2026-05-15T10:00:05Z"
+    },
+    {
+      "id": "log-2",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Upload",
+      "documentId": "doc-1",
+      "documentTitle": "Supplier Supply Chain Agreement 2026",
+      "details": "Uploaded revised v2 of document with SLA constraints.",
+      "createdAt": "2026-05-20T14:30:05Z"
+    },
+    {
+      "id": "log-3",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "action": "Approve",
+      "documentId": "doc-1",
+      "documentTitle": "Supplier Supply Chain Agreement 2026",
+      "details": "Approved agreement and finalized document status to Approved.",
+      "createdAt": "2026-05-20T14:35:00Z"
+    }
+  ],
+  "comments": [
+    {
+      "id": "c-1",
+      "documentId": "doc-1",
+      "userId": "admin-1",
+      "userName": "Mohamed Bangura",
+      "userRole": "Admin",
+      "text": "This version looks fully complete. Standard SLA metrics are noted.",
+      "createdAt": "2026-05-20T14:34:30Z"
+    }
+  ],
+  "approvals": [],
+  "permissions": [],
+  "externalLinks": [],
+  "institutions": [
+    {
+      "id": "inst-smartdocs",
+      "name": "Agriculture Value Chain Development Project",
+      "units": [
+        "Procurement",
+        "Finance",
+        "Administration",
+        "IT",
+        "Management",
+        "Compliance",
+        "Marketing"
+      ],
+      "categoryFolders": {
+        "Contract": "Contracts",
+        "Invoice": "Invoices",
+        "Memo": "Memos & Correspondence",
+        "Report": "Reports",
+        "Support": "Support & Technical",
+        "Other": "General Documents"
+      },
+      "activityDimension": "none"
+    }
+  ]
+}
