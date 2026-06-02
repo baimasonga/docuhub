@@ -1128,8 +1128,8 @@ export default function App() {
               {/* Dynamic Greeting */}
               <div className="flex justify-between items-end">
                 <div>
-                  <h1 className="text-2xl font-display font-extrabold text-slate-900 tracking-tight">Enterprise Document Repository</h1>
-                  <p className="text-xs text-slate-400 font-medium">Automatic OCR document tagging, strict role authorization structures, and automated auditable reviews.</p>
+                  <h1 className="text-2xl font-display font-extrabold text-slate-900 tracking-tight">VaultDMS</h1>
+                  <p className="text-xs text-slate-400 font-medium">Secure document vault with AI-OCR tagging, role-based access, versioning, and auditable reviews.</p>
                 </div>
                 <div className="text-right text-[11px] font-mono font-bold text-slate-400">
                   <span>SYSTEM SERVER ACCESS: SECURE STORAGE OK</span>
