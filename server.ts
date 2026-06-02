@@ -95,11 +95,7 @@ let writeChain: Promise<void> = Promise.resolve();
 const DEFAULT_INSTITUTION_ID = 'inst-smartdocs';
 
 const DEFAULT_USERS: User[] = [
-  { id: 'admin-1', fullName: 'Sarah Jenkins', email: 'sarah.j@smartsdocs.org', role: 'Admin', department: 'IT', isActive: true, institutionId: DEFAULT_INSTITUTION_ID },
-  { id: 'manager-1', fullName: 'David Vance', email: 'david.v@smartsdocs.org', role: 'Manager', department: 'Finance', isActive: true, institutionId: DEFAULT_INSTITUTION_ID },
-  { id: 'staff-1', fullName: 'Mohamed Bangura', email: 'mohamedamadubangura@gmail.com', role: 'Staff', department: 'Procurement', isActive: true, institutionId: DEFAULT_INSTITUTION_ID },
-  { id: 'viewer-1', fullName: 'Alice Cooper', email: 'alice.c@smartsdocs.org', role: 'Viewer', department: 'Marketing', isActive: true, institutionId: DEFAULT_INSTITUTION_ID },
-  { id: 'auditor-1', fullName: 'Robert Sterling', email: 'robert.s@smartsdocs.org', role: 'Auditor', department: 'Compliance', isActive: true, institutionId: DEFAULT_INSTITUTION_ID }
+  { id: 'admin-1', fullName: 'Mohamed Bangura', email: 'mohamedbangura@avdp.org.sl', role: 'Admin', department: 'Procurement', isActive: true, institutionId: DEFAULT_INSTITUTION_ID }
 ];
 
 const DEFAULT_INSTITUTIONS: Institution[] = [
@@ -123,15 +119,15 @@ const DEFAULT_FOLDERS: Folder[] = [
   // Predefined department structures
   { id: 'proc-root', name: 'Procurement', parentFolderId: null, ownerId: 'admin-1', department: 'Procurement', createdAt: new Date().toISOString() },
   { id: 'proc-bids', name: 'Bid Documents', parentFolderId: 'proc-root', ownerId: 'admin-1', department: 'Procurement', createdAt: new Date().toISOString() },
-  { id: 'proc-contracts', name: 'Contracts', parentFolderId: 'proc-root', ownerId: 'staff-1', department: 'Procurement', createdAt: new Date().toISOString() },
+  { id: 'proc-contracts', name: 'Contracts', parentFolderId: 'proc-root', ownerId: 'admin-1', department: 'Procurement', createdAt: new Date().toISOString() },
   
   { id: 'fin-root', name: 'Finance', parentFolderId: null, ownerId: 'admin-1', department: 'Finance', createdAt: new Date().toISOString() },
-  { id: 'fin-invoices', name: 'Invoices', parentFolderId: 'fin-root', ownerId: 'manager-1', department: 'Finance', createdAt: new Date().toISOString() },
-  { id: 'fin-vouchers', name: 'Payment Vouchers', parentFolderId: 'fin-root', ownerId: 'manager-1', department: 'Finance', createdAt: new Date().toISOString() },
+  { id: 'fin-invoices', name: 'Invoices', parentFolderId: 'fin-root', ownerId: 'admin-1', department: 'Finance', createdAt: new Date().toISOString() },
+  { id: 'fin-vouchers', name: 'Payment Vouchers', parentFolderId: 'fin-root', ownerId: 'admin-1', department: 'Finance', createdAt: new Date().toISOString() },
   
   { id: 'admin-root', name: 'Administration', parentFolderId: null, ownerId: 'admin-1', department: 'Administration', createdAt: new Date().toISOString() },
   { id: 'it-root', name: 'IT Configs', parentFolderId: null, ownerId: 'admin-1', department: 'IT', createdAt: new Date().toISOString() },
-  { id: 'mgmt-root', name: 'Management Papers', parentFolderId: null, ownerId: 'manager-1', department: 'Management', createdAt: new Date().toISOString() }
+  { id: 'mgmt-root', name: 'Management Papers', parentFolderId: null, ownerId: 'admin-1', department: 'Management', createdAt: new Date().toISOString() }
 ];
 
 // Let's seed preloaded sample files
@@ -140,7 +136,7 @@ const DEFAULT_DOCUMENTS: Document[] = [
     id: 'doc-1',
     title: 'Supplier Supply Chain Agreement 2026',
     description: 'Annual procurement agreement template for tier-1 supply vendors.',
-    ownerId: 'staff-1',
+    ownerId: 'admin-1',
     ownerName: 'Mohamed Bangura',
     department: 'Procurement',
     folderId: 'proc-contracts',
@@ -156,46 +152,6 @@ const DEFAULT_DOCUMENTS: Document[] = [
     createdAt: '2026-05-15T10:00:00Z',
     updatedAt: '2026-05-20T14:30:00Z'
   },
-  {
-    id: 'doc-2',
-    title: 'Q1 System Audit Report',
-    description: 'Initial performance log of storage systems and local database backups.',
-    ownerId: 'admin-1',
-    ownerName: 'Sarah Jenkins',
-    department: 'IT',
-    folderId: 'it-root',
-    documentType: 'Report',
-    status: 'Pending Approval',
-    confidentialityLevel: 'Normal File',
-    currentVersion: 'v1',
-    isStarred: false,
-    isArchived: false,
-    isDeleted: false,
-    tags: ['it', 'report', 'backup', 'audit'],
-    ocrText: 'SYSTEM AUDIT REPORT:\n- Backup storage node: ONLINE\n- Disk utility: 42% utilized\n- SSL Certs updated for all load balance units.\n- Recommendation: Setup multi-disk raid configurations.',
-    createdAt: '2026-05-25T09:12:00Z',
-    updatedAt: '2026-05-25T09:12:00Z'
-  },
-  {
-    id: 'doc-3',
-    title: 'Acme Invoice AI-12903',
-    description: 'Hardware provisioning order for local engineering staff.',
-    ownerId: 'manager-1',
-    ownerName: 'David Vance',
-    department: 'Finance',
-    folderId: 'fin-invoices',
-    documentType: 'Invoice',
-    status: 'Approved',
-    confidentialityLevel: 'Official Record',
-    currentVersion: 'v1',
-    isStarred: false,
-    isArchived: false,
-    isDeleted: false,
-    tags: ['invoice', 'finance', 'hardware', 'approved-2026'],
-    ocrText: 'INVOICE: #AI-12903\nDATE: April 12, 2026\nAcme Hardware Supplies LLC\nTO: SmartDocs organization Finance Unit.\n- 5x Enterprise Workstations - $7,500.00\n- 3x IPS Developer Monitors - $1,200.00\nTOTAL: $8,700.00\nPAID on May 1st 2026.',
-    createdAt: '2026-04-15T11:00:00Z',
-    updatedAt: '2026-05-01T16:00:00Z'
-  }
 ];
 
 const DEFAULT_VERSIONS: DocumentVersion[] = [
@@ -206,7 +162,7 @@ const DEFAULT_VERSIONS: DocumentVersion[] = [
     fileSize: 4500,
     fileType: 'txt',
     versionNumber: 'v1',
-    uploadedBy: 'staff-1',
+    uploadedBy: 'admin-1',
     uploadedByName: 'Mohamed Bangura',
     fileData: 'This SUPPLY CHAIN AGREEMENT is entered into on this 1st day of January 2026.',
     createdAt: '2026-05-15T10:00:00Z'
@@ -218,45 +174,21 @@ const DEFAULT_VERSIONS: DocumentVersion[] = [
     fileSize: 5200,
     fileType: 'txt',
     versionNumber: 'v2',
-    uploadedBy: 'staff-1',
+    uploadedBy: 'admin-1',
     uploadedByName: 'Mohamed Bangura',
     fileData: 'This SUPPLY CHAIN AGREEMENT is entered into on this 1st day of January 2026. PARTIES: DocuHub logistics and Tier-1 vendors. DELIVERABLES: Weekly fulfillment auditing, dynamic routing optimization, SLA 99.5% accuracy. TERMS: Net 30 days.',
     createdAt: '2026-05-20T14:30:00Z'
   },
-  {
-    id: 'ver-2',
-    documentId: 'doc-2',
-    fileName: 'system_backups_log.txt',
-    fileSize: 2100,
-    fileType: 'txt',
-    versionNumber: 'v1',
-    uploadedBy: 'admin-1',
-    uploadedByName: 'Sarah Jenkins',
-    fileData: 'SYSTEM AUDIT REPORT:\n- Backup storage node: ONLINE\n- Disk utility: 42% utilized\n- SSL Certs updated for all load balance units.\n- Recommendation: Setup multi-disk raid configurations.',
-    createdAt: '2026-05-25T09:12:00Z'
-  },
-  {
-    id: 'ver-3',
-    documentId: 'doc-3',
-    fileName: 'invoice_AI_12903.txt',
-    fileSize: 3100,
-    fileType: 'txt',
-    versionNumber: 'v1',
-    uploadedBy: 'manager-1',
-    uploadedByName: 'David Vance',
-    fileData: 'INVOICE: #AI-12903\nDATE: April 12, 2026\nAcme Hardware Supplies LLC\nTO: SmartDocs organization Finance Unit.\n- 5x Enterprise Workstations - $7,500.00\n- 3x IPS Developer Monitors - $1,200.00\nTOTAL: $8,700.00\nPAID on May 1st 2026.',
-    createdAt: '2026-04-15T11:00:00Z'
-  }
 ];
 
 const DEFAULT_LOGS: ActivityLog[] = [
-  { id: 'log-1', userId: 'staff-1', userName: 'Mohamed Bangura', userRole: 'Staff', action: 'Upload', documentId: 'doc-1', documentTitle: 'Supplier Supply Chain Agreement 2026', details: 'Uploaded v1 version of document into Contracts folder.', createdAt: '2026-05-15T10:00:05Z' },
-  { id: 'log-2', userId: 'staff-1', userName: 'Mohamed Bangura', userRole: 'Staff', action: 'Upload', documentId: 'doc-1', documentTitle: 'Supplier Supply Chain Agreement 2026', details: 'Uploaded revised v2 of document with SLA constraints.', createdAt: '2026-05-20T14:30:05Z' },
-  { id: 'log-3', userId: 'manager-1', userName: 'David Vance', userRole: 'Manager', action: 'Approve', documentId: 'doc-1', documentTitle: 'Supplier Supply Chain Agreement 2026', details: 'Approved agreement and finalized document status to Approved.', createdAt: '2026-05-20T14:35:00Z' }
+  { id: 'log-1', userId: 'admin-1', userName: 'Mohamed Bangura', userRole: 'Admin', action: 'Upload', documentId: 'doc-1', documentTitle: 'Supplier Supply Chain Agreement 2026', details: 'Uploaded v1 version of document into Contracts folder.', createdAt: '2026-05-15T10:00:05Z' },
+  { id: 'log-2', userId: 'admin-1', userName: 'Mohamed Bangura', userRole: 'Admin', action: 'Upload', documentId: 'doc-1', documentTitle: 'Supplier Supply Chain Agreement 2026', details: 'Uploaded revised v2 of document with SLA constraints.', createdAt: '2026-05-20T14:30:05Z' },
+  { id: 'log-3', userId: 'admin-1', userName: 'Mohamed Bangura', userRole: 'Admin', action: 'Approve', documentId: 'doc-1', documentTitle: 'Supplier Supply Chain Agreement 2026', details: 'Approved agreement and finalized document status to Approved.', createdAt: '2026-05-20T14:35:00Z' }
 ];
 
 const DEFAULT_COMMENTS: Comment[] = [
-  { id: 'c-1', documentId: 'doc-1', userId: 'manager-1', userName: 'David Vance', userRole: 'Manager', text: 'This version looks fully complete. Standard SLA metrics are noted.', createdAt: '2026-05-20T14:34:30Z' }
+  { id: 'c-1', documentId: 'doc-1', userId: 'admin-1', userName: 'Mohamed Bangura', userRole: 'Admin', text: 'This version looks fully complete. Standard SLA metrics are noted.', createdAt: '2026-05-20T14:34:30Z' }
 ];
 
 const DEFAULT_APPROVALS: ApprovalRequest[] = [];
@@ -850,7 +782,7 @@ function sanitizeUserPayload(body: Partial<User>): { value?: Omit<User, 'id'>; e
   const institutionId = body.institutionId ? String(body.institutionId) : DEFAULT_INSTITUTION_ID;
 
   if (!fullName) return { error: 'Full name is required.' };
-  if (!email || !/^\S+@\S+\.\S+$/.test(email)) return { error: 'A valid email address is required.' };
+  if (!email || !email.toLowerCase().endsWith('@avdp.org.sl')) return { error: 'Only @avdp.org.sl email addresses are allowed.' };
   if (!USER_ROLES.includes(role)) return { error: 'A valid role is required.' };
   if (!department) return { error: 'Department is required.' };
   if (!db.institutions.some(i => i.id === institutionId)) return { error: 'Selected institution does not exist.' };
