@@ -31,11 +31,6 @@ const app = express();
 // Railway (and most PaaS) inject the port to bind via the PORT env var.
 const PORT = Number(process.env.PORT) || 3000;
 
-// Module-scoped server reference — keeps the net.Server handle alive for the
-// full process lifetime so it is never garbage-collected after startServer()
-// resolves, and gives signal handlers a reference for graceful shutdown.
-let server: ReturnType<typeof app.listen> | null = null;
-
 // Body parser
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
@@ -1739,94 +1734,39 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    // In production the server bundle lives at dist/server.mjs; resolve the
-    // static asset directory relative to this file so it works regardless of
-    // what directory Railway uses as the working directory when it runs
-    // `node dist/server.mjs`.
-    const distPath = path.resolve(
-      // import.meta.url is the file:// URL of the compiled server bundle.
-      // Resolving '..' from dist/server.mjs gives us the project root, then
-      // we step back into dist/ for the frontend assets.
-      new URL('.', import.meta.url).pathname
-    );
-    console.log(`[startup] Serving static assets from: ${distPath}`);
-    app.use(express.static(distPath, { index: 'index.html' }));
-    // SPA fallback: serve index.html for any non-API GET so that client-side
-    // routing works correctly (Express 4 compatible).
-    app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
+    // Serve static files from compiled dist folder in production
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    // SPA fallback: serve index.html for any non-API GET (Express 4 compatible).
+    app.use((req, res, next) => {
       if (req.method !== 'GET' || req.path.startsWith('/api/')) return next();
-      res.sendFile('index.html', { root: distPath }, (err) => {
+      res.sendFile(path.join(distPath, 'index.html'), { root: '/' }, (err) => {
         if (err) next(err);
       });
     });
   }
 
-  // Generic error handler — must be registered after all routes and middleware
-  // so Express routes errors here instead of propagating them as unhandled
-  // rejections that would otherwise kill the process.
-  app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    console.error('[express] Unhandled route error:', err.message || err);
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'Internal server error.' });
-    }
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`SmartDocs DMS Full-Stack Engine booting on port: ${PORT}`);
+    console.log(`Active workspace location: ${process.cwd()}`);
   });
-
-  // Assign to the module-scoped variable so the handle is retained for the
-  // entire process lifetime — preventing GC from releasing the socket after
-  // startServer() resolves — and so signal handlers can close it cleanly.
-  await new Promise<void>((resolve, reject) => {
-    server = app.listen(PORT, '0.0.0.0', () => {
-      console.log(`[startup] SmartDocs DMS listening on port ${PORT} (0.0.0.0)`);
-      console.log(`[startup] Active workspace location: ${process.cwd()}`);
-      resolve();
-    });
-    server.on('error', (err: NodeJS.ErrnoException) => {
-      console.error(`[fatal] Failed to bind to port ${PORT}:`, err);
-      reject(err);
-    });
-  });
-
-  console.log('[startup] Server is ready and accepting connections.');
 }
 
-// Only treat truly unexpected synchronous crashes as fatal. Background async
-// operations (e.g. Supabase persistence writes) can fail transiently without
-// the server being in an unrecoverable state — logging the error is enough.
-// Exiting on every unhandledRejection was causing the process to die after a
-// successful listen when a background write failed, producing "connection
-// refused" 502s even though the server had booted correctly.
-process.on('uncaughtException', (err) => {
-  console.error('[fatal] uncaughtException — process cannot continue:', err);
-  process.exit(1);
-});
-process.on('unhandledRejection', (reason) => {
-  // Log but do NOT exit. An unhandled rejection from a fire-and-forget async
-  // operation (like a Supabase write) should not bring down a healthy server.
-  console.error('[warn] unhandledRejection (non-fatal):', reason);
-});
-
-// Graceful shutdown: stop accepting new connections and let in-flight requests
-// drain before the process exits. This prevents Railway's SIGTERM (sent during
-// redeploys) from hard-killing the process mid-request, and also ensures the
-// module-scoped `server` reference is explicitly closed rather than abandoned.
-function shutdown(signal: string) {
-  console.log(`[shutdown] Received ${signal}; closing server gracefully.`);
-  if (server) {
-    server.close(() => {
-      console.log('[shutdown] All connections closed. Exiting.');
-      process.exit(0);
-    });
-    // Force-exit after 10 s if connections don't drain on their own.
-    setTimeout(() => {
-      console.error('[shutdown] Graceful shutdown timed out. Force-exiting.');
-      process.exit(1);
-    }, 10_000).unref();
-  } else {
-    process.exit(0);
-  }
+// Surface fatal errors in the deploy logs, then exit so the platform restarts a
+// clean process. After an uncaughtException / unhandledRejection the process is
+// in an undefined state; staying alive (only logging) leaves a wedged server
+// that boots fine but stops answering requests. Fail fast and let Railway's
+// auto-restart bring up a healthy container instead.
+let shuttingDown = false;
+function fatal(label: string, err: unknown) {
+  console.error(`[fatal] ${label}:`, err);
+  if (shuttingDown) return;
+  shuttingDown = true;
+  // Give stderr a tick to flush before exiting.
+  setTimeout(() => process.exit(1), 100);
 }
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('uncaughtException', (err) => fatal('uncaughtException', err));
+process.on('unhandledRejection', (reason) => fatal('unhandledRejection', reason));
 
 // Spark up
 startServer().catch((err) => {
