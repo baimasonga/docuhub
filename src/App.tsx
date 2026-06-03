@@ -1190,8 +1190,8 @@ export default function App() {
   };
 
   // Open Sharing dialog
-  const openShareModal = (docId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const openShareModal = (docId: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     setSelectedDocId(docId);
     setShareTargetUserId('');
     setSharePermissionType('Viewer');
@@ -1260,6 +1260,10 @@ export default function App() {
 
   // Count approvals awaiting current manager review
   const pendingApprovalsCount = stats?.pendingMyApprovalCount || 0;
+
+  const selectedDocs = documents.filter(doc => selectedIds.has(doc.id));
+  const singleSelectedDoc = selectedDocs.length === 1 ? selectedDocs[0] : null;
+  const selectionMenuOpen = openMenuId === '__selection-toolbar';
 
   return (
     <div className="flex h-screen bg-[#F8FAFC] font-sans text-slate-800 overflow-hidden">
@@ -1685,6 +1689,143 @@ export default function App() {
 
               {/* Master files list */}
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden flex flex-col">
+                {selectedIds.size > 0 && (
+                  <div className="sticky top-0 z-20 px-4 pt-4 pb-2 bg-white/95 backdrop-blur">
+                    <div className="flex min-h-12 items-center gap-1 rounded-full bg-slate-100/90 px-3 py-2 text-slate-700 shadow-sm ring-1 ring-slate-200/70">
+                      <button
+                        type="button"
+                        onClick={clearSelection}
+                        title="Clear selection"
+                        aria-label="Clear selection"
+                        className="grid h-8 w-8 place-items-center rounded-full text-slate-600 transition-colors hover:bg-white hover:text-slate-900"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                      <span className="px-2 text-sm font-bold text-slate-800 whitespace-nowrap">{selectedIds.size} selected</span>
+
+                      <button
+                        type="button"
+                        disabled
+                        title="AI assistant coming soon"
+                        className="ml-2 hidden items-center gap-1.5 rounded-full border border-slate-300 bg-white/40 px-3 py-1.5 text-[11px] font-bold text-slate-400 sm:inline-flex disabled:cursor-not-allowed"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Ask Gemini</span>
+                      </button>
+
+                      <span className="mx-1 hidden h-6 w-px bg-slate-300/80 sm:block" />
+
+                      {currentView === 'trash' ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={handleBulkRestore}
+                            title="Restore selection"
+                            className="inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold text-indigo-700 transition-colors hover:bg-white"
+                          >
+                            <X className="w-4 h-4 rotate-45" />
+                            <span className="hidden sm:inline">Restore</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleBulkPurge}
+                            title="Delete forever"
+                            className="inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold text-rose-600 transition-colors hover:bg-rose-50"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                            <span className="hidden sm:inline">Delete forever</span>
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          {currentUser?.role !== 'Viewer' && (
+                            <button
+                              type="button"
+                              onClick={() => singleSelectedDoc && openShareModal(singleSelectedDoc.id)}
+                              disabled={!singleSelectedDoc}
+                              title={singleSelectedDoc ? 'Share with people' : 'Share is available for one item at a time'}
+                              className="grid h-8 w-8 place-items-center rounded-full transition-colors hover:bg-white disabled:cursor-not-allowed disabled:text-slate-400"
+                            >
+                              <Share2 className="w-4 h-4" />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={handleBulkDownload}
+                            title="Download"
+                            className="grid h-8 w-8 place-items-center rounded-full transition-colors hover:bg-white"
+                          >
+                            <Download className="w-4 h-4" />
+                          </button>
+                          {currentUser?.role !== 'Viewer' && (
+                            <button
+                              type="button"
+                              onClick={() => openMoveModal(Array.from(selectedIds))}
+                              title="Move to folder"
+                              className="grid h-8 w-8 place-items-center rounded-full transition-colors hover:bg-white"
+                            >
+                              <CornerDownRight className="w-4 h-4" />
+                            </button>
+                          )}
+                          {currentUser?.role !== 'Viewer' && (
+                            <button
+                              type="button"
+                              onClick={handleBulkDelete}
+                              title="Move to trash"
+                              className="grid h-8 w-8 place-items-center rounded-full transition-colors hover:bg-rose-50 hover:text-rose-600"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => singleSelectedDoc && openLinkModal(singleSelectedDoc.id)}
+                            disabled={!singleSelectedDoc}
+                            title={singleSelectedDoc ? 'Get link' : 'Links are available for one item at a time'}
+                            className="grid h-8 w-8 place-items-center rounded-full transition-colors hover:bg-white disabled:cursor-not-allowed disabled:text-slate-400"
+                          >
+                            <Link2 className="w-4 h-4" />
+                          </button>
+                          <div className="relative ml-auto">
+                            <button
+                              type="button"
+                              onClick={() => setOpenMenuId(selectionMenuOpen ? null : '__selection-toolbar')}
+                              title="More actions"
+                              className="grid h-8 w-8 place-items-center rounded-full transition-colors hover:bg-white"
+                            >
+                              <MoreVertical className="w-4 h-4" />
+                            </button>
+                            {selectionMenuOpen && (
+                              <>
+                                <div className="fixed inset-0 z-30" onClick={() => setOpenMenuId(null)} />
+                                <div className="absolute right-0 top-10 z-40 w-52 rounded-xl border border-slate-100 bg-white py-1 text-left text-[11px] font-semibold text-slate-600 shadow-2xl">
+                                  {singleSelectedDoc && (
+                                    <>
+                                      <button onClick={() => { setOpenMenuId(null); setSelectedDocId(singleSelectedDoc.id); }} className="flex w-full items-center gap-2.5 px-3 py-2 hover:bg-slate-50">
+                                        <Eye className="w-3.5 h-3.5 text-slate-400" /><span>Open details</span>
+                                      </button>
+                                      <button onClick={(e) => { handleMakeCopy(singleSelectedDoc.id, e); setOpenMenuId(null); }} className="flex w-full items-center gap-2.5 px-3 py-2 hover:bg-slate-50">
+                                        <Copy className="w-3.5 h-3.5 text-slate-400" /><span>Make a copy</span>
+                                      </button>
+                                      {currentUser?.role !== 'Viewer' && (
+                                        <button onClick={(e) => { handleRename(singleSelectedDoc.id, singleSelectedDoc.title, e); setOpenMenuId(null); }} className="flex w-full items-center gap-2.5 px-3 py-2 hover:bg-slate-50">
+                                          <Pencil className="w-3.5 h-3.5 text-slate-400" /><span>Rename</span>
+                                        </button>
+                                      )}
+                                    </>
+                                  )}
+                                  <button onClick={() => { handleBulkStar(); setOpenMenuId(null); }} className="flex w-full items-center gap-2.5 px-3 py-2 hover:bg-slate-50">
+                                    <Star className="w-3.5 h-3.5 text-slate-400" /><span>Star / unstar selection</span>
+                                  </button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
                 {documents.length === 0 ? (
                   <div className="p-16 text-center text-slate-400 flex flex-col items-center justify-center">
                     <div className="w-12 h-12 rounded-full bg-slate-50 flex items-center justify-center text-slate-300 mb-3.5">
@@ -2672,41 +2813,6 @@ export default function App() {
               </button>
             </form>
           </div>
-        </div>
-      )}
-
-      {/* FLOATING SELECTION TOOLBAR (Google-Drive style bulk actions) */}
-      {selectedIds.size > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center space-x-1 bg-slate-900 text-white rounded-2xl shadow-2xl px-3 py-2 text-xs">
-          <button onClick={clearSelection} title="Clear selection" className="p-1.5 hover:bg-white/10 rounded-lg">
-            <X className="w-4 h-4" />
-          </button>
-          <span className="font-bold px-2 whitespace-nowrap">{selectedIds.size} selected</span>
-          <span className="w-px h-5 bg-white/15 mx-1" />
-          {currentView === 'trash' ? (
-            <>
-              <button onClick={handleBulkRestore} className="px-3 py-1.5 hover:bg-white/10 rounded-lg flex items-center space-x-1.5 font-semibold">
-                <X className="w-3.5 h-3.5 rotate-45" /><span>Restore</span>
-              </button>
-              <button onClick={handleBulkPurge} className="px-3 py-1.5 hover:bg-rose-500/30 text-rose-300 rounded-lg flex items-center space-x-1.5 font-semibold">
-                <Trash2 className="w-3.5 h-3.5" /><span>Delete forever</span>
-              </button>
-            </>
-          ) : (
-            <>
-              <button onClick={handleBulkDownload} title="Download" className="p-2 hover:bg-white/10 rounded-lg"><Download className="w-4 h-4" /></button>
-              <button onClick={handleBulkStar} title="Star / unstar" className="p-2 hover:bg-white/10 rounded-lg"><Star className="w-4 h-4" /></button>
-              {currentUser && currentUser.role !== 'Viewer' && (
-                <button onClick={() => openMoveModal(Array.from(selectedIds))} title="Move to folder" className="p-2 hover:bg-white/10 rounded-lg"><CornerDownRight className="w-4 h-4" /></button>
-              )}
-              {selectedIds.size === 1 && (
-                <button onClick={() => openLinkModal(Array.from(selectedIds)[0] as string)} title="Get link" className="p-2 hover:bg-white/10 rounded-lg"><Link2 className="w-4 h-4" /></button>
-              )}
-              {currentUser && currentUser.role !== 'Viewer' && (
-                <button onClick={handleBulkDelete} title="Move to trash" className="p-2 hover:bg-rose-500/30 text-rose-300 rounded-lg"><Trash2 className="w-4 h-4" /></button>
-              )}
-            </>
-          )}
         </div>
       )}
 
