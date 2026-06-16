@@ -2381,8 +2381,14 @@ if (typeof process !== 'undefined' && typeof process.on === 'function') {
   process.on('unhandledRejection', (reason) => fatal('unhandledRejection', reason));
 }
 
-// Spark up
+// Spark up. We avoid `process.exit` here — on Cloudflare Workers it's either
+// missing or kills the isolate during module init, which fails deploy
+// validation. The platform (Railway / Workers) will restart on its own if the
+// process truly dies; otherwise the error is logged and the server stays up
+// with whatever it managed to initialize.
 startServer().catch((err) => {
   console.error('[fatal] Failed to start server:', err);
-  process.exit(1);
+  if (typeof process !== 'undefined' && typeof process.exit === 'function' && typeof (globalThis as any).WebSocketPair === 'undefined') {
+    process.exit(1);
+  }
 });
