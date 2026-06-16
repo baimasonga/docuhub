@@ -1,6 +1,13 @@
 name = "docuhub"
+main = "worker/index.ts"
 compatibility_date = "2026-06-16"
-pages_build_output_dir = "dist-pages"
+compatibility_flags = ["nodejs_compat"]
 
-# Configure API_ORIGIN in the Cloudflare Pages dashboard or with Wrangler secrets/vars.
+# Static SPA assets built by `npm run build` (vite -> dist-pages)
+[assets]
+directory = "./dist-pages"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# Configure API_ORIGIN in the Cloudflare dashboard or with Wrangler secrets/vars.
 # Example: API_ORIGIN = "https://docuhub-api.example.com"
