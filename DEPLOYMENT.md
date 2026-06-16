@@ -82,9 +82,17 @@ that Node API origin.
 
 | Setting | Value |
 |---|---|
-| Build command | `npm run build:pages` |
+| Build command | `npm run build:pages` (or `npm run build`) |
 | Build output directory | `dist-pages` |
+| Deploy command | *(leave blank)* |
 | Node version | `20` or newer |
+
+> ⚠️ **Do not set a deploy command.** Cloudflare Pages auto-deploys the build
+> output directory; setting a deploy command like `npx wrangler deploy` runs
+> the Workers deploy flow and fails with
+> `Missing entry-point to Worker script or to assets directory`. If your Pages
+> project currently has a custom deploy command configured, clear it under
+> **Settings → Builds & deployments → Deploy command**.
 
 ## Required Pages environment variable
 
