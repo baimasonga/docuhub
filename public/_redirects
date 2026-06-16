@@ -1,2 +1,0 @@
-# Cloudflare Pages SPA fallback. API and /s share-link requests are handled by Pages Functions.
-/* /index.html 200
