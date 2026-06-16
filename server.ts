@@ -76,6 +76,7 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABA
 const STATE_TABLE = 'docuhub_state';
 const STATE_ID = 'docuhub';
 const useSupabase = Boolean(SUPABASE_URL && SUPABASE_KEY);
+const SUPABASE_STARTUP_TIMEOUT_MS = Number(process.env.SUPABASE_STARTUP_TIMEOUT_MS) || 10000;
 
 let supabase: SupabaseClient | null = null;
 if (useSupabase) {
@@ -90,6 +91,18 @@ if (useSupabase) {
 // Serialize Supabase writes through a single promise chain so concurrent
 // mutations persist in order (last write wins, consistently).
 let writeChain: Promise<void> = Promise.resolve();
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 // ----------------------------------------------------
 // Object storage for file binaries (Supabase Storage)
@@ -358,11 +371,15 @@ function writeDb() {
 async function initStore(): Promise<void> {
   if (useSupabase && supabase) {
     try {
-      const { data, error } = await supabase
-        .from(STATE_TABLE)
-        .select('data')
-        .eq('id', STATE_ID)
-        .maybeSingle();
+      const { data, error } = await withTimeout(
+        Promise.resolve(supabase
+          .from(STATE_TABLE)
+          .select('data')
+          .eq('id', STATE_ID)
+          .maybeSingle()),
+        SUPABASE_STARTUP_TIMEOUT_MS,
+        'Supabase state load'
+      );
       if (error) throw error;
       if (data && data.data) {
         db = { ...db, ...(data.data as typeof db) };
@@ -2339,9 +2356,9 @@ async function startServer() {
   // Prepare object storage and migrate any inline file bytes in the background,
   // so the health check isn't blocked by (potentially large) uploads.
   if (storageEnabled) {
-    ensureBucket()
-      .then(() => migrateFilesToStorage())
-      .catch(err => console.error('[storage] background init failed:', err));
+    withTimeout(ensureBucket(), SUPABASE_STARTUP_TIMEOUT_MS, 'Supabase storage setup')
+      .then(() => withTimeout(migrateFilesToStorage(), SUPABASE_STARTUP_TIMEOUT_MS, 'Supabase storage migration'))
+      .catch(err => console.error('[storage] background init failed:', err.message || err));
   }
 }
 
