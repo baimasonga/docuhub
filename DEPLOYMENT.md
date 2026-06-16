@@ -66,3 +66,53 @@ PORT=3000 npm start
   Storage objects (orphans are harmless but accumulate).
 - **In-panel preview** of offloaded files relies on the download endpoint
   (signed URL) rather than inline rendering.
+
+---
+
+# Deploying the frontend to Cloudflare Pages
+
+Cloudflare Pages can host the compiled Vite React SPA from this repo. The app's
+API remains the existing Node/Express server (`server.ts`), because the current
+backend uses Express, filesystem fallbacks, Supabase service credentials, and
+large request bodies that are better kept in a Node runtime. Pages Functions in
+this repo proxy same-origin `/api/*` and `/s/*` requests from the Pages site to
+that Node API origin.
+
+## Cloudflare Pages build settings
+
+| Setting | Value |
+|---|---|
+| Build command | `npm run build:pages` |
+| Build output directory | `dist-pages` |
+| Node version | `20` or newer |
+
+## Required Pages environment variable
+
+Set this in **Workers & Pages → your Pages project → Settings → Environment variables**:
+
+| Variable | Value | Notes |
+|---|---|---|
+| `API_ORIGIN` | `https://<your-node-api-host>` | Origin running `server.ts`, for example the Railway URL. Do not include a trailing slash. |
+
+Keep the existing backend variables (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
+`GEMINI_API_KEY`, `SESSION_SECRET`) on the Node API host, not in Cloudflare Pages.
+The Pages deployment only needs `API_ORIGIN`.
+
+## Deploy from the command line
+
+```bash
+npm run deploy:pages
+```
+
+The deployment uses `wrangler.toml`, which points Pages at `dist-pages`. For local
+Pages testing, run:
+
+```bash
+npm run preview:pages
+```
+
+## Routing notes
+
+- `public/_redirects` provides the SPA fallback for client-side React routes.
+- `functions/api/[[path]].ts` proxies API requests to `API_ORIGIN`.
+- `functions/s/[[path]].ts` proxies public share links to `API_ORIGIN`.
