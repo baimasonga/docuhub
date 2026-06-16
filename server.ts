@@ -2348,9 +2348,8 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  app.listen(PORT, () => {
     console.log(`Chore Box DMS Full-Stack Engine booting on port: ${PORT}`);
-    console.log(`Active workspace location: ${process.cwd()}`);
   });
 
   // Prepare object storage and migrate any inline file bytes in the background,
@@ -2375,8 +2374,12 @@ function fatal(label: string, err: unknown) {
   // Give stderr a tick to flush before exiting.
   setTimeout(() => process.exit(1), 100);
 }
-process.on('uncaughtException', (err) => fatal('uncaughtException', err));
-process.on('unhandledRejection', (reason) => fatal('unhandledRejection', reason));
+// `process.on` is unavailable in some runtimes (e.g. Cloudflare Workers
+// nodejs_compat); skip the fatal handlers there so module init doesn't throw.
+if (typeof process !== 'undefined' && typeof process.on === 'function') {
+  process.on('uncaughtException', (err) => fatal('uncaughtException', err));
+  process.on('unhandledRejection', (reason) => fatal('unhandledRejection', reason));
+}
 
 // Spark up
 startServer().catch((err) => {

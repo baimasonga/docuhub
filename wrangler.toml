@@ -3,11 +3,17 @@ main = "worker/index.ts"
 compatibility_date = "2026-06-16"
 compatibility_flags = ["nodejs_compat"]
 
-# Static SPA assets built by `npm run build` (vite -> dist-pages)
+# Static SPA assets built by `npm run build` (vite -> dist-pages).
 [assets]
 directory = "./dist-pages"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 
-# Configure API_ORIGIN in the Cloudflare dashboard or with Wrangler secrets/vars.
-# Example: API_ORIGIN = "https://docuhub-api.example.com"
+[vars]
+NODE_ENV = "production"
+
+# Required secrets (set with `wrangler secret put` or in the dashboard):
+#   SUPABASE_URL                 https://<ref>.supabase.co
+#   SUPABASE_SERVICE_ROLE_KEY    Supabase service-role key (durable persistence + storage)
+#   GEMINI_API_KEY               Optional — AI OCR/tagging (falls back to heuristics)
+#   SESSION_SECRET               Optional — overrides the cookie HMAC secret
