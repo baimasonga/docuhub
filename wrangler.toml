@@ -12,6 +12,12 @@ not_found_handling = "single-page-application"
 [vars]
 NODE_ENV = "production"
 
+# `body-parser` pulls in iconv-lite, whose dynamic `require('streams')` breaks
+# under the Workers nodejs_compat shim. Swap it for a TextDecoder-backed stub
+# that handles the UTF-8 / Latin-1 charsets real clients actually send.
+[alias]
+"iconv-lite" = "./worker/iconv-lite-stub.js"
+
 # Required secrets (set with `wrangler secret put` or in the dashboard):
 #   SUPABASE_URL                 https://<ref>.supabase.co
 #   SUPABASE_SERVICE_ROLE_KEY    Supabase service-role key (durable persistence + storage)
