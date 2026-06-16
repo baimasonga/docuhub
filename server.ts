@@ -407,13 +407,21 @@ async function initStore(): Promise<void> {
 // service-role key (already a stable secret in prod) so it works with zero extra
 // config; set SESSION_SECRET to rotate/override.
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24h
-const SESSION_SECRET =
-  process.env.SESSION_SECRET ||
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.SUPABASE_KEY ||
-  crypto.randomBytes(32).toString('hex'); // dev fallback (won't persist across restarts)
-if (!process.env.SESSION_SECRET && !useSupabase) {
-  console.warn('[startup] No SESSION_SECRET set; using an ephemeral secret — logins will reset on restart.');
+// Resolved lazily on first sign/verify call. Module-scope `crypto.randomBytes`
+// is disallowed on Cloudflare Workers ("Disallowed operation called within
+// global scope"); env vars also aren't reliably bound until the first request.
+let cachedSessionSecret: string | null = null;
+function getSessionSecret(): string {
+  if (cachedSessionSecret) return cachedSessionSecret;
+  cachedSessionSecret =
+    process.env.SESSION_SECRET ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_KEY ||
+    crypto.randomBytes(32).toString('hex');
+  if (!process.env.SESSION_SECRET && !useSupabase) {
+    console.warn('[startup] No SESSION_SECRET set; using an ephemeral secret — logins will reset on restart.');
+  }
+  return cachedSessionSecret;
 }
 
 function b64url(buf: Buffer): string {
@@ -421,7 +429,7 @@ function b64url(buf: Buffer): string {
 }
 function signSession(userId: string, expMs: number): string {
   const payload = b64url(Buffer.from(`${userId}.${expMs}`, 'utf8'));
-  const sig = b64url(crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest());
+  const sig = b64url(crypto.createHmac('sha256', getSessionSecret()).update(payload).digest());
   return `${payload}.${sig}`;
 }
 function verifySession(token: string): string | null {
@@ -429,7 +437,7 @@ function verifySession(token: string): string | null {
   if (dot < 0) return null;
   const payload = token.slice(0, dot);
   const sig = token.slice(dot + 1);
-  const expected = b64url(crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest());
+  const expected = b64url(crypto.createHmac('sha256', getSessionSecret()).update(payload).digest());
   // constant-time compare
   const a = Buffer.from(sig);
   const b = Buffer.from(expected);
