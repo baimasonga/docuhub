@@ -1,7 +1,6 @@
 name = "docuhub"
 main = "worker/index.ts"
 compatibility_date = "2026-06-16"
-compatibility_flags = ["nodejs_compat"]
 
 # Static SPA assets built by `npm run build` (vite -> dist-pages).
 [assets]
@@ -11,15 +10,13 @@ not_found_handling = "single-page-application"
 
 [vars]
 NODE_ENV = "production"
+# Required for /api/* and /s/* proxying when deploying with `wrangler deploy`.
+# Set this in the Cloudflare dashboard or uncomment for local testing.
+# API_ORIGIN = "https://<your-node-api-host>"
 
-# `body-parser` pulls in iconv-lite, whose dynamic `require('streams')` breaks
-# under the Workers nodejs_compat shim. Swap it for a TextDecoder-backed stub
-# that handles the UTF-8 / Latin-1 charsets real clients actually send.
-[alias]
-"iconv-lite" = "./worker/iconv-lite-stub.js"
-
-# Required secrets (set with `wrangler secret put` or in the dashboard):
-#   SUPABASE_URL                 https://<ref>.supabase.co
+# Required secrets for the separate Node API host (set on that host, not here):
+#   SUPABASE_URL                 https://onqonmzzcgobvllkothg.supabase.co
 #   SUPABASE_SERVICE_ROLE_KEY    Supabase service-role key (durable persistence + storage)
+#   SUPABASE_ANON_KEY             Supabase anon/public key (auth + OAuth handoff)
 #   GEMINI_API_KEY               Optional — AI OCR/tagging (falls back to heuristics)
 #   SESSION_SECRET               Optional — overrides the cookie HMAC secret

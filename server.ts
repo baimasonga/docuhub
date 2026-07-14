@@ -77,8 +77,19 @@ const STATE_TABLE = 'docuhub_state';
 const STATE_ID = 'docuhub';
 const useSupabase = Boolean(SUPABASE_URL && SUPABASE_KEY);
 const SUPABASE_STARTUP_TIMEOUT_MS = Number(process.env.SUPABASE_STARTUP_TIMEOUT_MS) || 10000;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+const APP_BASE_URL = process.env.APP_BASE_URL || process.env.PUBLIC_APP_URL || 'http://localhost:3000';
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const EMAIL_FROM = process.env.EMAIL_FROM || 'DocuHub <no-reply@docuhub.local>';
+
 
 let supabase: SupabaseClient | null = null;
+let supabaseAnon: SupabaseClient | null = null;
+if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+  supabaseAnon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false }
+  });
+}
 if (useSupabase) {
   supabase = createClient(SUPABASE_URL!, SUPABASE_KEY!, {
     auth: { persistSession: false, autoRefreshToken: false }
@@ -294,6 +305,21 @@ const DEFAULT_APPROVALS: ApprovalRequest[] = [];
 const DEFAULT_PERMISSIONS: SharePermission[] = [];
 const DEFAULT_EXTERNAL_LINKS: ExternalShareLink[] = [];
 
+interface WorkspaceInvite {
+  id: string;
+  email: string;
+  role: User['role'];
+  department: string;
+  institutionId: string;
+  tokenHash: string;
+  invitedBy: string;
+  acceptedAt?: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
+const DEFAULT_INVITES: WorkspaceInvite[] = [];
+
 // Load Database Store
 let db = {
   users: DEFAULT_USERS,
@@ -305,7 +331,8 @@ let db = {
   approvals: DEFAULT_APPROVALS,
   permissions: DEFAULT_PERMISSIONS,
   externalLinks: DEFAULT_EXTERNAL_LINKS,
-  institutions: DEFAULT_INSTITUTIONS as Institution[]
+  institutions: DEFAULT_INSTITUTIONS as Institution[],
+  invitations: DEFAULT_INVITES
 };
 
 function readDb() {
@@ -406,6 +433,10 @@ async function initStore(): Promise<void> {
 // by setting request headers. The signing secret defaults to the Supabase
 // service-role key (already a stable secret in prod) so it works with zero extra
 // config; set SESSION_SECRET to rotate/override.
+
+// Demo profile switching remains enabled by default so existing deployments keep
+// working. Set DEMO_MODE=false once real authentication is configured.
+const DEMO_MODE = process.env.DEMO_MODE !== 'false';
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 // Resolved lazily on first sign/verify call. Module-scope `crypto.randomBytes`
 // is disallowed on Cloudflare Workers ("Disallowed operation called within
@@ -413,12 +444,17 @@ const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 let cachedSessionSecret: string | null = null;
 function getSessionSecret(): string {
   if (cachedSessionSecret) return cachedSessionSecret;
-  cachedSessionSecret =
+  const configuredSecret =
     process.env.SESSION_SECRET ||
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_KEY ||
-    crypto.randomBytes(32).toString('hex');
-  if (!process.env.SESSION_SECRET && !useSupabase) {
+    process.env.SUPABASE_KEY;
+
+  if (configuredSecret) {
+    cachedSessionSecret = configuredSecret;
+  } else if (typeof (globalThis as any).WebSocketPair !== 'undefined') {
+    throw new Error('SESSION_SECRET must be configured when running the API in Cloudflare Workers.');
+  } else {
+    cachedSessionSecret = crypto.randomBytes(32).toString('hex');
     console.warn('[startup] No SESSION_SECRET set; using an ephemeral secret — logins will reset on restart.');
   }
   return cachedSessionSecret;
@@ -978,6 +1014,187 @@ function sanitizeUserPayload(body: Partial<User>): { value?: Omit<User, 'id'>; e
   };
 }
 
+function sha256(input: string): string {
+  return crypto.createHash('sha256').update(input).digest('hex');
+}
+
+function publicUser(user: User) {
+  return {
+    id: user.id,
+    fullName: user.fullName,
+    email: user.email,
+    role: user.role,
+    department: user.department,
+    isActive: user.isActive,
+    institutionId: user.institutionId
+  };
+}
+
+async function sendTransactionalEmail(to: string, subject: string, html: string): Promise<{ sent: boolean; reason?: string }> {
+  if (!RESEND_API_KEY) {
+    console.warn(`[email] RESEND_API_KEY missing; skipped transactional email to ${to}.`);
+    return { sent: false, reason: 'RESEND_API_KEY is not configured.' };
+  }
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${RESEND_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ from: EMAIL_FROM, to, subject, html })
+  });
+  if (!response.ok) {
+    const details = await response.text().catch(() => response.statusText);
+    throw new Error(`Resend email failed: ${details}`);
+  }
+  return { sent: true };
+}
+
+// Runtime flags needed by the SPA. Keep this deliberately small and free of
+// secrets; it is safe to expose to browsers.
+app.get('/api/config', (_req, res) => {
+  res.json({
+    demoMode: DEMO_MODE,
+    auth: {
+      emailPassword: Boolean(useSupabase),
+      google: Boolean(SUPABASE_URL && SUPABASE_ANON_KEY),
+      microsoft: Boolean(SUPABASE_URL && SUPABASE_ANON_KEY)
+    },
+    uploads: { directToStorage: storageEnabled }
+  });
+});
+
+
+// Email/password signup backed by Supabase Auth when configured. The existing
+// profile datastore is kept in sync so current authorization code continues to
+// work while the relational-table migration is phased in.
+app.post('/api/auth/signup', async (req, res) => {
+  if (!useSupabase || !supabase) return res.status(501).json({ error: 'Supabase Auth is not configured.' });
+  const { email, password, fullName, workspaceName } = req.body || {};
+  if (!email || !password || !fullName) return res.status(400).json({ error: 'Email, password, and full name are required.' });
+  if (String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const institutionId = `inst-${Date.now().toString(36)}`;
+  try {
+    const { data, error } = await supabase.auth.admin.createUser({
+      email: normalizedEmail,
+      password,
+      email_confirm: false,
+      user_metadata: { fullName, workspaceName: workspaceName || `${fullName}'s Workspace`, institutionId }
+    });
+    if (error) return res.status(400).json({ error: error.message });
+    const institution: Institution = {
+      ...DEFAULT_INSTITUTIONS[0],
+      id: institutionId,
+      name: workspaceName || `${fullName}'s Workspace`,
+    };
+    db.institutions.push(institution);
+    const user: User = {
+      id: data.user?.id || `user-${Date.now().toString(36)}`,
+      fullName,
+      email: normalizedEmail,
+      role: 'Admin',
+      department: 'Administration',
+      isActive: true,
+      institutionId
+    };
+    db.users.push(user);
+    writeDb();
+    res.status(201).json({ user: publicUser(user), workspace: institution });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to create account.', details: (err as Error).message });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  if (!supabaseAnon) return res.status(501).json({ error: 'Supabase Auth client is not configured.' });
+  const { email, password } = req.body || {};
+  if (!email || !password) return res.status(400).json({ error: 'Email and password are required.' });
+  const { data, error } = await supabaseAnon.auth.signInWithPassword({ email, password });
+  if (error || !data.user?.email) return res.status(401).json({ error: error?.message || 'Invalid login.' });
+  const user = db.users.find(u => u.email.toLowerCase() === data.user!.email!.toLowerCase() && u.isActive);
+  if (!user) return res.status(403).json({ error: 'No active DocuHub profile exists for this account.' });
+  const token = signSession(user.id, Date.now() + SESSION_TTL_MS);
+  res.setHeader('Set-Cookie', `sid=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${SESSION_TTL_MS / 1000}`);
+  res.json({ success: true, user: publicUser(user) });
+});
+
+app.get('/api/auth/oauth/:provider', (req, res) => {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return res.status(501).json({ error: 'Supabase OAuth is not configured.' });
+  const provider = req.params.provider === 'microsoft' ? 'azure' : req.params.provider;
+  if (!['google', 'azure'].includes(provider)) return res.status(400).json({ error: 'Unsupported OAuth provider.' });
+  const redirectTo = `${APP_BASE_URL}/auth/callback`;
+  const query = new URLSearchParams({ provider, redirect_to: redirectTo });
+  res.json({ url: `${SUPABASE_URL}/auth/v1/authorize?${query.toString()}` });
+});
+
+app.post('/api/invitations', async (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+  const parsed = sanitizeUserPayload({ ...(req.body || {}), institutionId: admin.institutionId || db.institutions[0]?.id });
+  if (parsed.error || !parsed.value) return res.status(400).json({ error: parsed.error });
+  const token = crypto.randomBytes(24).toString('hex');
+  const invite: WorkspaceInvite = {
+    id: `invite-${Date.now().toString(36)}`,
+    email: parsed.value.email,
+    role: parsed.value.role,
+    department: parsed.value.department,
+    institutionId: parsed.value.institutionId,
+    tokenHash: sha256(token),
+    invitedBy: admin.id,
+    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    createdAt: new Date().toISOString()
+  };
+  db.invitations.push(invite);
+  writeDb();
+  const acceptUrl = `${APP_BASE_URL}/invite/${token}`;
+  const emailResult = await sendTransactionalEmail(invite.email, 'You have been invited to DocuHub', `<p>You were invited to DocuHub.</p><p><a href="${acceptUrl}">Accept invitation</a></p>`).catch(err => ({ sent: false, reason: err.message }));
+  res.status(201).json({ id: invite.id, email: invite.email, role: invite.role, department: invite.department, expiresAt: invite.expiresAt, acceptUrl, emailResult });
+});
+
+app.post('/api/invitations/accept', async (req, res) => {
+  const { token, fullName, password } = req.body || {};
+  if (!token || !fullName) return res.status(400).json({ error: 'Invitation token and full name are required.' });
+  const invite = db.invitations.find(i => i.tokenHash === sha256(token) && !i.acceptedAt);
+  if (!invite || new Date(invite.expiresAt).getTime() < Date.now()) return res.status(404).json({ error: 'Invitation is invalid or expired.' });
+  let authId: string | undefined;
+  if (useSupabase && supabase && password) {
+    const { data, error } = await supabase.auth.admin.createUser({ email: invite.email, password, email_confirm: false, user_metadata: { fullName, institutionId: invite.institutionId } });
+    if (error) return res.status(400).json({ error: error.message });
+    authId = data.user?.id;
+  }
+  const user: User = { id: authId || `user-${Date.now().toString(36)}`, fullName, email: invite.email, role: invite.role, department: invite.department, isActive: true, institutionId: invite.institutionId };
+  db.users.push(user);
+  invite.acceptedAt = new Date().toISOString();
+  writeDb();
+  res.status(201).json({ user: publicUser(user) });
+});
+
+app.get('/api/search', (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  const q = String(req.query.q || '').trim().toLowerCase();
+  if (!q) return res.json([]);
+  const results = db.documents
+    .filter(d => !d.isDeleted && canViewDocument(user, d))
+    .filter(d => [d.title, d.description, d.ownerName, d.department, d.documentType, ...(d.tags || []), d.ocrText || ''].join(' ').toLowerCase().includes(q))
+    .slice(0, 50)
+    .map(withLatestFileMetadata);
+  res.json(results);
+});
+
+app.post('/api/uploads/signed-url', async (req, res) => {
+  const user = getUser(req);
+  if (!user) return res.status(401).json({ error: 'Not authenticated.' });
+  if (!storageEnabled || !supabase) return res.status(501).json({ error: 'Direct-to-storage uploads require Supabase Storage.' });
+  const { fileName, contentType } = req.body || {};
+  if (!fileName) return res.status(400).json({ error: 'fileName is required.' });
+  const objectPath = `incoming/${user.institutionId || 'default'}/${user.id}/${Date.now()}-${path.basename(fileName)}`;
+  const { data, error } = await (supabase.storage.from(STORAGE_BUCKET) as any).createSignedUploadUrl(objectPath, { upsert: false, contentType });
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ path: objectPath, signedUrl: data.signedUrl, token: data.token });
+});
+
 // Users List
 app.get('/api/users', (req, res) => {
   res.json(db.users);
@@ -1049,6 +1266,10 @@ app.post('/api/users/:id/toggle-active', (req, res) => {
 // identity is resolved from the signature, so it survives redeploys and can't
 // be spoofed via headers.
 app.post('/api/users/switch-profile', (req, res) => {
+  if (!DEMO_MODE) {
+    return res.status(403).json({ error: 'Demo profile switching is disabled.' });
+  }
+
   const { userId } = req.body;
   const user = db.users.find(u => u.id === userId);
   if (!user) {

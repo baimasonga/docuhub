@@ -112,6 +112,11 @@ function looksLikeBase64(s: string): boolean {
   return compact.length > 0 && compact.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(compact);
 }
 
+function canPreviewInline(fileType?: string, fileName?: string): boolean {
+  const t = `${fileType || ''} ${fileName || ''}`.toLowerCase();
+  return t.includes('pdf') || t.includes('png') || t.includes('jpg') || t.includes('jpeg') || t.includes('gif') || t.includes('webp');
+}
+
 function downloadHref(fileData: string | undefined, fileType?: string): string {
   const mime = mimeForType(fileType);
   const data = fileData || '';
@@ -160,6 +165,7 @@ export default function App() {
   // Global Workspace state
   const [users, setUsers] = useState<User[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [demoMode, setDemoMode] = useState(true);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [folders, setFolders] = useState<FolderType[]>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
@@ -275,9 +281,13 @@ export default function App() {
   // mount we first restore any existing session (so a refresh or new tab keeps
   // the current profile), and only fall back to a default profile if none.
   useEffect(() => {
-    fetch('/api/users')
-      .then(res => res.json())
-      .then((data: User[]) => {
+    Promise.all([
+      fetch('/api/config').then(res => res.json()).catch(() => ({ demoMode: true })),
+      fetch('/api/users').then(res => res.json()),
+    ])
+      .then(([config, data]: [{ demoMode?: boolean }, User[]]) => {
+        const isDemoMode = config.demoMode !== false;
+        setDemoMode(isDemoMode);
         setUsers(data);
         return fetch('/api/session')
           .then(res => res.json())
@@ -286,6 +296,7 @@ export default function App() {
               setCurrentUser(session.user);
               return;
             }
+            if (!isDemoMode) return;
             const staff = data.find((u: User) => u.id === 'staff-1' && u.isActive) || data.find((u: User) => u.isActive) || data[0];
             if (!staff) return;
             return fetch('/api/users/switch-profile', {
@@ -1374,20 +1385,22 @@ export default function App() {
             <span className="text-slate-300 w-px h-5">|</span>
 
             {/* Profile switch trigger */}
-            <div className="flex items-center space-x-2">
-              <span className="text-[10px] font-mono tracking-wider font-semibold text-slate-400 uppercase">Test profile:</span>
-              <select
-                value={currentUser?.id || ''}
-                onChange={(e) => handleUserChange(e.target.value)}
-                className="bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-1.5 text-[11px] font-semibold text-indigo-700 outline-none transition-all hover:bg-indigo-100"
-              >
-                {users.map(u => (
-                  <option key={u.id} value={u.id} disabled={!u.isActive}>
-                    {u.fullName} ({u.role}{!u.isActive ? ' · inactive' : ''})
-                  </option>
-                ))}
-              </select>
-            </div>
+            {demoMode && (
+              <div className="flex items-center space-x-2">
+                <span className="text-[10px] font-mono tracking-wider font-semibold text-slate-400 uppercase">Test profile:</span>
+                <select
+                  value={currentUser?.id || ''}
+                  onChange={(e) => handleUserChange(e.target.value)}
+                  className="bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-1.5 text-[11px] font-semibold text-indigo-700 outline-none transition-all hover:bg-indigo-100"
+                >
+                  {users.map(u => (
+                    <option key={u.id} value={u.id} disabled={!u.isActive}>
+                      {u.fullName} ({u.role}{!u.isActive ? ' · inactive' : ''})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
           </div>
         </header>
@@ -2304,6 +2317,28 @@ export default function App() {
                     GEMINI ACTIVE
                   </div>
                   {docDetail.document.ocrText}
+                </div>
+              </div>
+            )}
+
+            {/* In-browser preview for PDFs and images */}
+            {docDetail.versions[0] && canPreviewInline(docDetail.versions[0].fileType, docDetail.versions[0].fileName) && (
+              <div className="space-y-1.5">
+                <span className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Document Preview</span>
+                <div className="border border-slate-150 rounded-xl overflow-hidden bg-slate-50">
+                  {mimeForType(docDetail.versions[0].fileType).startsWith('image/') ? (
+                    <img
+                      src={`/api/documents/${docDetail.document.id}/versions/${docDetail.versions[0].id}/download`}
+                      alt={docDetail.versions[0].fileName}
+                      className="max-h-72 w-full object-contain bg-white"
+                    />
+                  ) : (
+                    <iframe
+                      src={`/api/documents/${docDetail.document.id}/versions/${docDetail.versions[0].id}/download`}
+                      title={`Preview ${docDetail.versions[0].fileName}`}
+                      className="h-72 w-full bg-white"
+                    />
+                  )}
                 </div>
               </div>
             )}

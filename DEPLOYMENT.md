@@ -24,7 +24,7 @@ local JSON file.
 
    | Variable | Value | Notes |
    |---|---|---|
-   | `SUPABASE_URL` | `https://<ref>.supabase.co` | Supabase → Project Settings → API → Project URL |
+   | `SUPABASE_URL` | `https://onqonmzzcgobvllkothg.supabase.co` | Paid Supabase project URL |
    | `SUPABASE_SERVICE_ROLE_KEY` | `<service_role secret>` | Same page — keep secret, server-side only |
    | `GEMINI_API_KEY` | `<your key>` | Optional — OCR/tagging falls back to heuristics without it |
 
@@ -92,7 +92,10 @@ that Node API origin.
 > the Workers deploy flow and fails with
 > `Missing entry-point to Worker script or to assets directory`. If your Pages
 > project currently has a custom deploy command configured, clear it under
-> **Settings → Builds & deployments → Deploy command**.
+> **Settings → Builds & deployments → Deploy command**. Also ensure the Pages
+> project is using the build output directory (`dist-pages`) rather than the
+> Workers entry point in `wrangler.toml`, which is only for the experimental
+> full Worker deployment path.
 
 ## Required Pages environment variable
 
@@ -103,7 +106,7 @@ Set this in **Workers & Pages → your Pages project → Settings → Environmen
 | `API_ORIGIN` | `https://<your-node-api-host>` | Origin running `server.ts`, for example the Railway URL. Do not include a trailing slash. |
 
 Keep the existing backend variables (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-`GEMINI_API_KEY`, `SESSION_SECRET`) on the Node API host, not in Cloudflare Pages.
+`SUPABASE_ANON_KEY`, `GEMINI_API_KEY`, `SESSION_SECRET`) on the Node API host, not in Cloudflare Pages.
 The Pages deployment only needs `API_ORIGIN`.
 
 ## Deploy from the command line

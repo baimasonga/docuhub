@@ -1,28 +1,37 @@
-// Cloudflare Workers entry-point.
+// Cloudflare Worker entry-point for static assets plus API proxying.
 //
-// Static SPA assets are served from the ASSETS binding (built into ./dist-pages).
-// Everything under /api/* and /s/* is handed to the existing Express app in
-// ../server.ts via Cloudflare's Node HTTP compatibility bridge.
-import { httpServerHandler } from 'cloudflare:node';
-import '../server';
+// The Node/Express API in ../server.ts is intentionally not imported here:
+// Cloudflare validates Worker modules before requests are handled and rejects
+// Node-style startup side effects such as random generation, timers, and
+// outbound I/O in global scope. Keep this Worker small and route API traffic to
+// the deployed Node API origin instead.
 
 interface Env {
   ASSETS: { fetch: (request: Request) => Promise<Response> };
+  API_ORIGIN?: string;
 }
-
-const EXPRESS_PORT = 3000;
-const expressHandler = httpServerHandler({ port: EXPRESS_PORT });
 
 function isApiPath(pathname: string): boolean {
   return pathname.startsWith('/api/') || pathname.startsWith('/s/');
 }
 
+async function proxyToApiOrigin(request: Request, apiOrigin: string): Promise<Response> {
+  const incomingUrl = new URL(request.url);
+  const targetUrl = new URL(incomingUrl.pathname + incomingUrl.search, apiOrigin);
+  return fetch(new Request(targetUrl, request));
+}
+
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
     if (isApiPath(url.pathname)) {
-      return expressHandler.fetch(request, env as unknown as Record<string, unknown>, ctx);
+      if (!env.API_ORIGIN) {
+        return new Response('API_ORIGIN is not configured for this Cloudflare deployment.', { status: 500 });
+      }
+      return proxyToApiOrigin(request, env.API_ORIGIN);
     }
+
     return env.ASSETS.fetch(request);
   },
 };
