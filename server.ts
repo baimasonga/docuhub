@@ -2350,8 +2350,11 @@ app.post('/api/documents/:id/copy', (req, res) => {
   res.status(201).json({ success: true, document: copy });
 });
 
-// Initialize Vite (dev) or static serving (production) and start listening.
-async function startServer() {
+// Load the datastore (and kick off storage init). On Workers this must run
+// inside a request context — module scope there can't perform async I/O and
+// doesn't see process.env yet — so worker/index.ts awaits ensureRuntimeReady()
+// per request; on node it runs once from startServer().
+async function initRuntime() {
   // Re-resolve env-derived config: on Workers this is the first point where
   // process.env is actually populated (see refreshPersistenceBackend).
   refreshPersistenceBackend();
@@ -2359,14 +2362,39 @@ async function startServer() {
     ? '[startup] Persistence backend: Supabase (durable)'
     : `[startup] Persistence backend: local file at ${DB_FILE}`);
 
-  // Load persisted state before accepting traffic so the first request sees a
-  // fully hydrated datastore.
   await initStore();
 
-  if (isWorkersRuntime) {
-    // Static assets are served by the Workers ASSETS binding; only /api/* and
-    // /s/* reach Express. Never load Vite here — it can't run in workerd.
-  } else if (process.env.NODE_ENV !== 'production') {
+  // Prepare object storage and migrate any inline file bytes in the background,
+  // so the first request isn't blocked by (potentially large) uploads.
+  if (storageEnabled) {
+    withTimeout(ensureBucket(), SUPABASE_STARTUP_TIMEOUT_MS, 'Supabase storage setup')
+      .then(() => withTimeout(migrateFilesToStorage(), SUPABASE_STARTUP_TIMEOUT_MS, 'Supabase storage migration'))
+      .catch(err => console.error('[storage] background init failed:', err.message || err));
+  }
+}
+
+let initPromise: Promise<void> | null = null;
+export function ensureRuntimeReady(): Promise<void> {
+  if (!initPromise) {
+    initPromise = initRuntime().catch((err) => {
+      console.error('[startup] Runtime init failed:', err);
+      // Allow a later request to retry instead of wedging on a transient error.
+      initPromise = null;
+      throw err;
+    });
+  }
+  return initPromise;
+}
+
+// Initialize Vite (dev) or static serving (production) and start listening.
+// node-only: on Workers, listen() happens at module scope below and static
+// assets come from the ASSETS binding.
+async function startServer() {
+  // Load persisted state before accepting traffic so the first request sees a
+  // fully hydrated datastore.
+  await ensureRuntimeReady();
+
+  if (process.env.NODE_ENV !== 'production') {
     // Vite is a dev-only dependency for the API server; load it lazily so a
     // production bundle never requires it at startup.
     const { createServer: createViteServer } = await import('vite');
@@ -2391,14 +2419,6 @@ async function startServer() {
   app.listen(PORT, () => {
     console.log(`Chore Box DMS Full-Stack Engine booting on port: ${PORT}`);
   });
-
-  // Prepare object storage and migrate any inline file bytes in the background,
-  // so the health check isn't blocked by (potentially large) uploads.
-  if (storageEnabled) {
-    withTimeout(ensureBucket(), SUPABASE_STARTUP_TIMEOUT_MS, 'Supabase storage setup')
-      .then(() => withTimeout(migrateFilesToStorage(), SUPABASE_STARTUP_TIMEOUT_MS, 'Supabase storage migration'))
-      .catch(err => console.error('[storage] background init failed:', err.message || err));
-  }
 }
 
 // Surface fatal errors in the deploy logs, then exit so the platform restarts a
@@ -2421,30 +2441,22 @@ if (typeof process !== 'undefined' && typeof process.on === 'function') {
   process.on('unhandledRejection', (reason) => fatal('unhandledRejection', reason));
 }
 
-// Spark up. On Cloudflare Workers, startup is deferred to the first request
-// (via ensureServerStarted from worker/index.ts): module scope there may not
-// perform async I/O or timers ("Disallowed operation called within global
-// scope" fails deploy validation), and process.env isn't populated yet, so
-// starting here would both break validation and pick the wrong config.
-// Everywhere else (Railway / node) we start immediately, as before.
-let startPromise: Promise<void> | null = null;
-export function ensureServerStarted(): Promise<void> {
-  if (!startPromise) {
-    startPromise = startServer().catch((err) => {
-      console.error('[fatal] Failed to start server:', err);
-      // Allow a later request to retry startup on Workers instead of wedging
-      // the isolate forever on a transient failure.
-      startPromise = null;
-      throw err;
-    });
-  }
-  return startPromise;
-}
-
-if (!isWorkersRuntime) {
-  ensureServerStarted().catch(() => {
-    // Error already logged above. We avoid `process.exit` on Workers-like
-    // runtimes; on node, exit so the platform restarts a clean process.
+// Spark up. On Cloudflare Workers the HTTP server MUST be created and listen()
+// in the global scope — that's cloudflare:node's documented httpServerHandler
+// pattern, and it keeps the server object out of any single request's I/O
+// context (a server created inside request A's context is unusable from
+// request B in production: "Cannot perform I/O on behalf of a different
+// request"). listen() itself is legal at global scope (it only registers the
+// port; no async I/O). Data loading stays deferred to the first request via
+// ensureRuntimeReady(), where env vars and fetch() are available.
+if (isWorkersRuntime) {
+  app.listen(PORT, () => {
+    console.log(`Chore Box DMS Full-Stack Engine booting on port: ${PORT} (Workers)`);
+  });
+} else {
+  startServer().catch((err) => {
+    console.error('[fatal] Failed to start server:', err);
+    // On node, exit so the platform restarts a clean process.
     if (typeof process !== 'undefined' && typeof process.exit === 'function') {
       process.exit(1);
     }

@@ -275,9 +275,30 @@ export default function App() {
   // mount we first restore any existing session (so a refresh or new tab keeps
   // the current profile), and only fall back to a default profile if none.
   useEffect(() => {
+    // Each step tolerates failure of the previous one so a single flaky
+    // request can't leave the app stuck on a blank shell with no profile.
+    const activateDefault = (data: User[]) => {
+      const staff = data.find((u: User) => u.id === 'staff-1' && u.isActive) || data.find((u: User) => u.isActive) || data[0];
+      if (!staff) return;
+      return fetch('/api/users/switch-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: staff.id })
+      })
+        .then(res => res.json())
+        .then(d => {
+          if (d.user) setCurrentUser(d.user);
+          else setCurrentUser(staff);
+        })
+        .catch(err => {
+          console.error('[bootstrap] switch-profile failed; using profile without a session cookie.', err);
+          setCurrentUser(staff);
+        });
+    };
     fetch('/api/users')
       .then(res => res.json())
       .then((data: User[]) => {
+        if (!Array.isArray(data)) throw new Error('Unexpected /api/users payload');
         setUsers(data);
         return fetch('/api/session')
           .then(res => res.json())
@@ -286,19 +307,14 @@ export default function App() {
               setCurrentUser(session.user);
               return;
             }
-            const staff = data.find((u: User) => u.id === 'staff-1' && u.isActive) || data.find((u: User) => u.isActive) || data[0];
-            if (!staff) return;
-            return fetch('/api/users/switch-profile', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ userId: staff.id })
-            })
-              .then(res => res.json())
-              .then(d => {
-                if (d.user) setCurrentUser(d.user);
-              });
+            return activateDefault(data);
+          })
+          .catch(err => {
+            console.error('[bootstrap] session restore failed; activating default profile.', err);
+            return activateDefault(data);
           });
-      });
+      })
+      .catch(err => console.error('[bootstrap] failed to load users:', err));
   }, []);
 
   // Sync Documents / Folders / Stats on user switch or action reload

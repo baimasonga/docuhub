@@ -4,7 +4,7 @@
 // Everything under /api/* and /s/* is handed to the existing Express app in
 // ../server.ts via Cloudflare's Node HTTP compatibility bridge.
 import { httpServerHandler } from 'cloudflare:node';
-import { ensureServerStarted } from '../server';
+import { ensureRuntimeReady } from '../server';
 
 interface Env {
   ASSETS: { fetch: (request: Request) => Promise<Response> };
@@ -21,10 +21,16 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (isApiPath(url.pathname)) {
-      // Boot the Express app lazily inside a request context: module scope on
-      // Workers can't do async I/O and doesn't see process.env, so this is the
-      // earliest point startup (Supabase state load, listen()) can happen.
-      await ensureServerStarted();
+      // Load the datastore lazily inside a request context: module scope on
+      // Workers can't do async I/O and doesn't see process.env. The Express
+      // server itself already listens (registered at module scope in
+      // server.ts). Never fail the request over init — the app falls back to
+      // its in-memory seed state, which every handler can serve.
+      try {
+        await ensureRuntimeReady();
+      } catch (err) {
+        console.error('[worker] runtime init failed; serving with in-memory state.', err);
+      }
       return expressHandler.fetch(request, env as unknown as Record<string, unknown>, ctx);
     }
     return env.ASSETS.fetch(request);
