@@ -29,7 +29,8 @@ instances).
 
 1. Create (or restore) a Supabase project.
 2. Apply the schema: paste `supabase/migrations/0001_relational_schema.sql`
-   into the SQL editor and run it (or `supabase db push` with the CLI).
+   into the SQL editor and run it (or `supabase db push` with the CLI), then
+   do the same for `0002_secure_legacy_state_table.sql`.
 3. Copy the **Project URL** and the **service_role key** from
    Project Settings → API.
 

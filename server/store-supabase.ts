@@ -330,23 +330,35 @@ export class SupabaseStore implements DataStore {
       const term = filter.query.trim();
       const ftsQ = q.textSearch('search_tsv', term, { type: 'websearch', config: 'english' }).order('created_at');
       const like = `%${term.replace(/[%_]/g, m => '\\' + m)}%`;
-      let subQ = this.from('documents').select(DOC_COLUMNS);
-      if (deleted === 'only') subQ = subQ.eq('is_deleted', true);
-      else if (deleted === 'exclude') subQ = subQ.eq('is_deleted', false);
-      if (filter.archived !== undefined) subQ = subQ.eq('is_archived', filter.archived);
-      if (filter.folderId !== undefined) {
-        subQ = filter.folderId === null ? subQ.is('folder_id', null) : subQ.eq('folder_id', filter.folderId);
-      }
-      if (filter.status) subQ = subQ.eq('status', filter.status);
-      if (filter.starred !== undefined) subQ = subQ.eq('is_starred', filter.starred);
-      if (filter.category) subQ = subQ.eq('document_type', filter.category);
-      subQ = subQ.or(`title.ilike.${like},owner_name.ilike.${like},department.ilike.${like},tags_text.ilike.${like}`).order('created_at');
 
-      const [fts, sub] = await Promise.all([ftsQ, subQ]);
+      // One .ilike() call per column, not a hand-built .or("col.ilike.$term")
+      // string: `term` is untrusted and PostgREST's or() syntax treats
+      // `,`/`(`/`)` as filter-structure characters, not literal text, so
+      // interpolating it directly would let a search term inject extra
+      // filter clauses. Passing the value through .ilike()'s own parameter
+      // instead means the client encodes it safely.
+      const substringCols = ['title', 'owner_name', 'department', 'tags_text'];
+      const subQueries = substringCols.map(col => {
+        let subQ = this.from('documents').select(DOC_COLUMNS);
+        if (deleted === 'only') subQ = subQ.eq('is_deleted', true);
+        else if (deleted === 'exclude') subQ = subQ.eq('is_deleted', false);
+        if (filter.archived !== undefined) subQ = subQ.eq('is_archived', filter.archived);
+        if (filter.folderId !== undefined) {
+          subQ = filter.folderId === null ? subQ.is('folder_id', null) : subQ.eq('folder_id', filter.folderId);
+        }
+        if (filter.status) subQ = subQ.eq('status', filter.status);
+        if (filter.starred !== undefined) subQ = subQ.eq('is_starred', filter.starred);
+        if (filter.category) subQ = subQ.eq('document_type', filter.category);
+        return subQ.ilike(col, like).order('created_at');
+      });
+
+      const results = await Promise.all([ftsQ, ...subQueries]);
       const rows: Row[] = [];
       const seen = new Set<string>();
-      for (const r of [...(SupabaseStore.unwrap(fts, 'searchFts') as Row[]), ...(SupabaseStore.unwrap(sub, 'searchLike') as Row[])]) {
-        if (!seen.has(r.id)) { seen.add(r.id); rows.push(r); }
+      for (const result of results) {
+        for (const r of SupabaseStore.unwrap(result, 'search') as Row[]) {
+          if (!seen.has(r.id)) { seen.add(r.id); rows.push(r); }
+        }
       }
       return rows.map(documentFromRow);
     }

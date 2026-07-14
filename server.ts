@@ -149,6 +149,38 @@ function safeObjectName(fileName: string): string {
   return fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
+// Tracks which user a signed direct-upload path (/api/uploads/sign) was
+// actually issued to. Without this, any client-supplied `storagePath` on
+// /api/documents/scan|upload|:id/version would be trusted verbatim — and
+// storagePath is echoed back in every document/version response to anyone
+// who can view that doc, so a user could point their own document at another
+// user's (or a revoked share's) storage object and read its bytes forever.
+// Per-process only (like the login rate limiter in server/auth.ts) — on
+// Workers each isolate tracks its own window, which is fine since the signed
+// URL itself is short-lived and this is just an extra ownership check on it.
+const pendingUploads = new Map<string, { userId: string; expiresAt: number }>();
+const PENDING_UPLOAD_TTL_MS = 15 * 60 * 1000;
+
+function registerPendingUpload(objectPath: string, userId: string): void {
+  pendingUploads.set(objectPath, { userId, expiresAt: Date.now() + PENDING_UPLOAD_TTL_MS });
+}
+
+// Non-consuming check — used by /scan, which previews the same storagePath
+// that a later /upload or /version call will still need to claim.
+function isPendingUploadOwnedBy(objectPath: string, userId: string): boolean {
+  const entry = pendingUploads.get(objectPath);
+  return Boolean(entry && entry.userId === userId && Date.now() <= entry.expiresAt);
+}
+
+// Consuming check — used wherever a storagePath is actually persisted onto a
+// document/version, so the same signed path can't be replayed onto a second
+// document once it's been used for one.
+function claimPendingUpload(objectPath: string, userId: string): boolean {
+  if (!isPendingUploadOwnedBy(objectPath, userId)) return false;
+  pendingUploads.delete(objectPath);
+  return true;
+}
+
 async function uploadVersionFile(docId: string, versionId: string, fileName: string, buffer: Buffer, contentType: string): Promise<string | null> {
   if (!storageEnabled || !supabase) return null;
   const objectPath = `${docId}/${versionId}/${safeObjectName(fileName)}`;
@@ -310,6 +342,11 @@ function mimeForType(fileType?: string): string {
 
 function isPreviewableInline(fileType?: string): boolean {
   const mime = mimeForType(fileType);
+  // SVG and HTML are never safe to serve inline (Content-Disposition: inline)
+  // from the app's own origin: both can embed <script> that would then run
+  // with the viewer's session. Everything else in the allowlist below is
+  // inert when rendered (bitmap images, PDF, plain/non-HTML text, JSON).
+  if (mime === 'image/svg+xml' || mime === 'text/html') return false;
   return mime.startsWith('image/') || mime === 'application/pdf' || mime.startsWith('text/') || mime === 'application/json';
 }
 
@@ -1228,6 +1265,9 @@ app.post('/api/documents/scan', h(async (req, res) => {
   if (!fileName || (!fileData && !storagePath)) {
     return res.status(400).json({ error: 'File name and file data (or a storagePath) are required for scanning.' });
   }
+  if (storagePath && !isPendingUploadOwnedBy(storagePath, user.id)) {
+    return res.status(403).json({ error: 'This storagePath was not issued to you.' });
+  }
 
   try {
     const payload = await analysisPayloadFor({ fileData, storagePath, fileSize: Number(fileSize) || undefined, fileType });
@@ -1270,6 +1310,7 @@ app.post('/api/uploads/sign', h(async (req, res) => {
     console.error('[storage] signed upload url failed:', error?.message);
     return res.json({ enabled: false });
   }
+  registerPendingUpload(objectPath, user.id);
   res.json({ enabled: true, objectPath, uploadUrl: data.signedUrl, token: data.token });
 }));
 
@@ -1285,6 +1326,9 @@ app.post('/api/documents/upload', h(async (req, res) => {
 
   if (!title || !fileName || (!fileData && !storagePath)) {
     return res.status(400).json({ error: 'Title, file name, and file data (or storagePath) are required.' });
+  }
+  if (storagePath && !claimPendingUpload(storagePath, user.id)) {
+    return res.status(403).json({ error: 'This storagePath was not issued to you, or has already been used.' });
   }
 
   const manualCategory = coerceDocumentCategory(documentType);
@@ -1392,6 +1436,9 @@ app.post('/api/documents/:id/version', h(async (req, res) => {
   }
   if (!fileName || (!fileData && !storagePath)) {
     return res.status(400).json({ error: 'File name and data are required.' });
+  }
+  if (storagePath && !claimPendingUpload(storagePath, user.id)) {
+    return res.status(403).json({ error: 'This storagePath was not issued to you, or has already been used.' });
   }
 
   try {
@@ -1915,7 +1962,9 @@ async function serveSharedLink(req: express.Request, res: express.Response, link
   if (link.requiresPassword && link.passwordHash) {
     const provided = (typeof req.query.pw === 'string' && req.query.pw)
       || (typeof req.query.password === 'string' ? req.query.password : '');
-    const ok = !!provided && sha256Hex(provided) === link.passwordHash;
+    const providedHash = Buffer.from(provided ? sha256Hex(provided) : '');
+    const expectedHash = Buffer.from(link.passwordHash);
+    const ok = !!provided && providedHash.length === expectedHash.length && crypto.timingSafeEqual(providedHash, expectedHash);
     if (!ok) {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       return res.status(provided ? 401 : 200).send(passwordGateHtml(req.path, Boolean(provided)));
@@ -1952,7 +2001,11 @@ async function serveSharedLink(req: express.Request, res: express.Response, link
 
   const buffer = storedFileToBuffer(full.fileData);
   res.setHeader('Content-Type', mimeForType(full.fileType));
-  const disposition = link.allowDownload !== false ? 'attachment' : 'inline';
+  // View-only links (allowDownload === false) want inline rendering, but only
+  // for types that are actually safe to render inline (see isPreviewableInline)
+  // — an anonymous visitor to a view-only link must never get inline SVG/HTML,
+  // which would execute same-origin with no auth required at all.
+  const disposition = link.allowDownload === false && isPreviewableInline(full.fileType) ? 'inline' : 'attachment';
   res.setHeader('Content-Disposition', `${disposition}; filename="${full.fileName}"`);
   return res.send(buffer);
 }
@@ -2029,8 +2082,9 @@ app.get('/api/documents/:id/preview', h(async (req, res) => {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     return res.send(doc.ocrText || 'No content available for this document.');
   }
-  res.setHeader('Content-Type', isPreviewableInline(latest.fileType) ? content.mime : 'application/octet-stream');
-  res.setHeader('Content-Disposition', `inline; filename="${latest.fileName}"`);
+  const canInline = isPreviewableInline(latest.fileType);
+  res.setHeader('Content-Type', canInline ? content.mime : 'application/octet-stream');
+  res.setHeader('Content-Disposition', `${canInline ? 'inline' : 'attachment'}; filename="${latest.fileName}"`);
   return res.send(content.buffer);
 }));
 

@@ -48,6 +48,16 @@ export async function sendEmail(opts: { to: string; subject: string; html: strin
 
 // ---- Templates -------------------------------------------------------------
 
+// Every template below interpolates user-controlled strings (names, document
+// titles, approval/share comments) into HTML. Escape them — an unescaped
+// document title like `<img src=x onerror=...>` would run in whatever mail
+// client renders the message.
+function escapeHtml(input: string): string {
+  return String(input ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c] as string));
+}
+
 function layout(title: string, bodyHtml: string): string {
   return `<!doctype html><html><body style="margin:0;padding:0;background:#f1f5f9;font-family:Segoe UI,Arial,sans-serif">
   <div style="max-width:520px;margin:24px auto;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0">
@@ -70,11 +80,11 @@ export function inviteEmail(opts: { fullName: string; email: string; tempPasswor
   return {
     subject: 'Your Chore Box DMS account is ready',
     html: layout('Welcome aboard', `
-      <p>Hi ${opts.fullName},</p>
+      <p>Hi ${escapeHtml(opts.fullName)},</p>
       <p>An account has been created for you. Sign in with:</p>
       <p style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px">
-        <strong>Email:</strong> ${opts.email}<br>
-        <strong>Temporary password:</strong> <code style="font-size:15px">${opts.tempPassword}</code>
+        <strong>Email:</strong> ${escapeHtml(opts.email)}<br>
+        <strong>Temporary password:</strong> <code style="font-size:15px">${escapeHtml(opts.tempPassword)}</code>
       </p>
       <p>You'll be asked to choose your own password on first login.</p>
       ${button(opts.baseUrl, 'Open Chore Box DMS')}`)
@@ -85,7 +95,7 @@ export function passwordResetEmail(opts: { fullName: string; resetUrl: string })
   return {
     subject: 'Reset your Chore Box DMS password',
     html: layout('Password reset', `
-      <p>Hi ${opts.fullName},</p>
+      <p>Hi ${escapeHtml(opts.fullName)},</p>
       <p>We received a request to reset your password. This link is valid for 1 hour:</p>
       ${button(opts.resetUrl, 'Choose a new password')}
       <p>If you didn't request this, you can safely ignore this email.</p>`)
@@ -96,10 +106,10 @@ export function tempPasswordEmail(opts: { fullName: string; tempPassword: string
   return {
     subject: 'Your Chore Box DMS password was reset',
     html: layout('Password reset by an administrator', `
-      <p>Hi ${opts.fullName},</p>
+      <p>Hi ${escapeHtml(opts.fullName)},</p>
       <p>An administrator reset your password. Sign in with this temporary password (you'll be asked to choose a new one):</p>
       <p style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px">
-        <code style="font-size:15px">${opts.tempPassword}</code>
+        <code style="font-size:15px">${escapeHtml(opts.tempPassword)}</code>
       </p>
       ${button(opts.baseUrl, 'Sign in')}`)
   };
@@ -111,10 +121,10 @@ export function approvalRequestedEmail(opts: {
   return {
     subject: `Approval requested: ${opts.documentTitle}`,
     html: layout('A document needs your review', `
-      <p>Hi ${opts.approverName},</p>
-      <p><strong>${opts.requesterName}</strong> requested your approval on
-        <strong>"${opts.documentTitle}"</strong>.</p>
-      ${opts.comment ? `<p style="border-left:3px solid #e2e8f0;padding-left:12px;color:#64748b">${opts.comment}</p>` : ''}
+      <p>Hi ${escapeHtml(opts.approverName)},</p>
+      <p><strong>${escapeHtml(opts.requesterName)}</strong> requested your approval on
+        <strong>"${escapeHtml(opts.documentTitle)}"</strong>.</p>
+      ${opts.comment ? `<p style="border-left:3px solid #e2e8f0;padding-left:12px;color:#64748b">${escapeHtml(opts.comment)}</p>` : ''}
       ${button(opts.baseUrl, 'Review in Chore Box DMS')}`)
   };
 }
@@ -126,10 +136,10 @@ export function approvalDecidedEmail(opts: {
   return {
     subject: `${opts.decision}: ${opts.documentTitle}`,
     html: layout('Approval decision', `
-      <p>Hi ${opts.requesterName},</p>
-      <p><strong>${opts.deciderName}</strong> reviewed <strong>"${opts.documentTitle}"</strong>:</p>
-      <p style="font-size:16px;font-weight:700;color:${color}">${opts.decision}</p>
-      ${opts.comment ? `<p style="border-left:3px solid #e2e8f0;padding-left:12px;color:#64748b">${opts.comment}</p>` : ''}
+      <p>Hi ${escapeHtml(opts.requesterName)},</p>
+      <p><strong>${escapeHtml(opts.deciderName)}</strong> reviewed <strong>"${escapeHtml(opts.documentTitle)}"</strong>:</p>
+      <p style="font-size:16px;font-weight:700;color:${color}">${escapeHtml(opts.decision)}</p>
+      ${opts.comment ? `<p style="border-left:3px solid #e2e8f0;padding-left:12px;color:#64748b">${escapeHtml(opts.comment)}</p>` : ''}
       ${button(opts.baseUrl, 'Open document')}`)
   };
 }
@@ -140,9 +150,9 @@ export function documentSharedEmail(opts: {
   return {
     subject: `${opts.sharerName} shared "${opts.documentTitle}" with you`,
     html: layout('A document was shared with you', `
-      <p>Hi ${opts.recipientName},</p>
-      <p><strong>${opts.sharerName}</strong> gave you <strong>${opts.permissionType}</strong> access to
-        <strong>"${opts.documentTitle}"</strong>.</p>
+      <p>Hi ${escapeHtml(opts.recipientName)},</p>
+      <p><strong>${escapeHtml(opts.sharerName)}</strong> gave you <strong>${escapeHtml(opts.permissionType)}</strong> access to
+        <strong>"${escapeHtml(opts.documentTitle)}"</strong>.</p>
       ${button(opts.baseUrl, 'Open in Chore Box DMS')}`)
   };
 }
