@@ -30,7 +30,15 @@ dotenv.config();
 
 const app = express();
 // Railway (and most PaaS) inject the port to bind via the PORT env var.
+// (On Cloudflare Workers this stays 3000, matching worker/index.ts's
+// httpServerHandler port.)
 const PORT = Number(process.env.PORT) || 3000;
+
+// Cloudflare Workers detection. Workers has no durable filesystem, and module
+// scope there can neither perform async I/O nor see process.env (bindings are
+// only populated inside a request context) — several startup paths below
+// branch on this.
+const isWorkersRuntime = typeof (globalThis as any).WebSocketPair !== 'undefined';
 
 // Body parser
 app.use(express.json({ limit: '50mb' }));
@@ -42,6 +50,10 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 // it can't be created/written (e.g. the volume isn't mounted yet), fall back to
 // a temp dir so the server still boots instead of crash-looping with a 502.
 function resolveDataDir(): string {
+  // Workers has no durable (or reliably writable) disk; the JSON-file backend
+  // is never used there (Supabase is, or state stays in-memory), so skip the
+  // mkdir/access probing that would just log scary errors at startup.
+  if (isWorkersRuntime) return path.join(os.tmpdir(), 'docuhub-data');
   const candidates = [
     process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(process.cwd(), 'data'),
     path.join(os.tmpdir(), 'docuhub-data')
@@ -71,22 +83,30 @@ const DB_FILE = path.join(DB_DIR, 'db.json');
 // row, mirroring the previous single-file JSON model, so all in-memory logic is
 // unchanged. When the env vars are absent (e.g. local dev), we fall back to the
 // JSON file on disk so the app still runs with zero extra setup.
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
 const STATE_TABLE = 'docuhub_state';
 const STATE_ID = 'docuhub';
-const useSupabase = Boolean(SUPABASE_URL && SUPABASE_KEY);
 const SUPABASE_STARTUP_TIMEOUT_MS = Number(process.env.SUPABASE_STARTUP_TIMEOUT_MS) || 10000;
 
+// On Cloudflare Workers, `process.env` is NOT populated during module
+// evaluation — bindings only become visible inside a request context. Any
+// env-derived config read at module scope must therefore be re-resolved from
+// startServer() (which runs inside the first request on Workers).
+let useSupabase = false;
+let storageEnabled = false;
 let supabase: SupabaseClient | null = null;
-if (useSupabase) {
-  supabase = createClient(SUPABASE_URL!, SUPABASE_KEY!, {
-    auth: { persistSession: false, autoRefreshToken: false }
-  });
-  console.log('[startup] Persistence backend: Supabase (durable)');
-} else {
-  console.log(`[startup] Persistence backend: local file at ${DB_FILE}`);
+
+function refreshPersistenceBackend(): void {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
+  useSupabase = Boolean(url && key);
+  storageEnabled = useSupabase;
+  if (useSupabase && !supabase) {
+    supabase = createClient(url!, key!, {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+  }
 }
+refreshPersistenceBackend();
 
 // Serialize Supabase writes through a single promise chain so concurrent
 // mutations persist in order (last write wins, consistently).
@@ -112,7 +132,6 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
 // small and serving via the CDN through short-lived signed URLs). Without
 // Supabase, files stay inline as base64/text (local-dev fallback).
 const STORAGE_BUCKET = 'documents';
-const storageEnabled = useSupabase;
 
 // Create the private bucket once at startup (no-op if it already exists).
 async function ensureBucket(): Promise<void> {
@@ -310,7 +329,7 @@ let db = {
 
 function readDb() {
   try {
-    if (fs.existsSync(DB_FILE)) {
+    if (!isWorkersRuntime && fs.existsSync(DB_FILE)) {
       const parsed = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
       db = { ...db, ...parsed };
     }
@@ -355,6 +374,9 @@ function writeDb() {
       .catch(err => console.error('[supabase] Persist chain error:', err));
     return;
   }
+  // Without Supabase on Workers, state is in-memory only (no durable disk to
+  // write to) — don't spam an "Error saving database" log on every mutation.
+  if (isWorkersRuntime) return;
   try {
     // Write to a temp file then atomically rename so a crash mid-write cannot
     // leave a truncated/corrupt db.json behind.
@@ -2330,11 +2352,21 @@ app.post('/api/documents/:id/copy', (req, res) => {
 
 // Initialize Vite (dev) or static serving (production) and start listening.
 async function startServer() {
+  // Re-resolve env-derived config: on Workers this is the first point where
+  // process.env is actually populated (see refreshPersistenceBackend).
+  refreshPersistenceBackend();
+  console.log(useSupabase
+    ? '[startup] Persistence backend: Supabase (durable)'
+    : `[startup] Persistence backend: local file at ${DB_FILE}`);
+
   // Load persisted state before accepting traffic so the first request sees a
   // fully hydrated datastore.
   await initStore();
 
-  if (process.env.NODE_ENV !== 'production') {
+  if (isWorkersRuntime) {
+    // Static assets are served by the Workers ASSETS binding; only /api/* and
+    // /s/* reach Express. Never load Vite here — it can't run in workerd.
+  } else if (process.env.NODE_ENV !== 'production') {
     // Vite is a dev-only dependency for the API server; load it lazily so a
     // production bundle never requires it at startup.
     const { createServer: createViteServer } = await import('vite');
@@ -2389,14 +2421,32 @@ if (typeof process !== 'undefined' && typeof process.on === 'function') {
   process.on('unhandledRejection', (reason) => fatal('unhandledRejection', reason));
 }
 
-// Spark up. We avoid `process.exit` here — on Cloudflare Workers it's either
-// missing or kills the isolate during module init, which fails deploy
-// validation. The platform (Railway / Workers) will restart on its own if the
-// process truly dies; otherwise the error is logged and the server stays up
-// with whatever it managed to initialize.
-startServer().catch((err) => {
-  console.error('[fatal] Failed to start server:', err);
-  if (typeof process !== 'undefined' && typeof process.exit === 'function' && typeof (globalThis as any).WebSocketPair === 'undefined') {
-    process.exit(1);
+// Spark up. On Cloudflare Workers, startup is deferred to the first request
+// (via ensureServerStarted from worker/index.ts): module scope there may not
+// perform async I/O or timers ("Disallowed operation called within global
+// scope" fails deploy validation), and process.env isn't populated yet, so
+// starting here would both break validation and pick the wrong config.
+// Everywhere else (Railway / node) we start immediately, as before.
+let startPromise: Promise<void> | null = null;
+export function ensureServerStarted(): Promise<void> {
+  if (!startPromise) {
+    startPromise = startServer().catch((err) => {
+      console.error('[fatal] Failed to start server:', err);
+      // Allow a later request to retry startup on Workers instead of wedging
+      // the isolate forever on a transient failure.
+      startPromise = null;
+      throw err;
+    });
   }
-});
+  return startPromise;
+}
+
+if (!isWorkersRuntime) {
+  ensureServerStarted().catch(() => {
+    // Error already logged above. We avoid `process.exit` on Workers-like
+    // runtimes; on node, exit so the platform restarts a clean process.
+    if (typeof process !== 'undefined' && typeof process.exit === 'function') {
+      process.exit(1);
+    }
+  });
+}

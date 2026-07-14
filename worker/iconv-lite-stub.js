@@ -16,17 +16,39 @@ const SUPPORTED = new Set([
   'ascii', 'latin1', 'iso-8859-1', 'windows-1252',
 ]);
 
+function toTextDecoderEncoding(encoding) {
+  const normalized = normalize(encoding);
+  return normalized === 'utf8' ? 'utf-8'
+    : normalized === 'utf16le' ? 'utf-16le'
+    : normalized === 'utf16be' ? 'utf-16be'
+    : normalized;
+}
+
 export function encodingExists(encoding) {
   return SUPPORTED.has(normalize(encoding));
 }
 
 export function decode(buf, encoding) {
-  const normalized = normalize(encoding);
-  const decoderEncoding = normalized === 'utf8' ? 'utf-8'
-    : normalized === 'utf16le' ? 'utf-16le'
-    : normalized === 'utf16be' ? 'utf-16be'
-    : normalized;
-  return new TextDecoder(decoderEncoding).decode(buf);
+  return new TextDecoder(toTextDecoderEncoding(encoding)).decode(buf);
+}
+
+// `raw-body` decodes request bodies through a streaming decoder from
+// getDecoder() (write() per chunk, end() to flush) rather than decode().
+// Throwing for unknown charsets is part of the contract: raw-body catches it
+// and responds 415 Unsupported Media Type.
+export function getDecoder(encoding) {
+  if (!encodingExists(encoding)) {
+    throw new Error(`iconv-lite stub: unsupported charset "${encoding}"`);
+  }
+  const decoder = new TextDecoder(toTextDecoderEncoding(encoding));
+  return {
+    write(buf) {
+      return decoder.decode(buf, { stream: true });
+    },
+    end() {
+      return decoder.decode();
+    },
+  };
 }
 
 export function encode(str, encoding) {
@@ -38,4 +60,4 @@ export function encode(str, encoding) {
   throw new Error(`iconv-lite stub: encode() not implemented for "${encoding}"`);
 }
 
-export default { encodingExists, decode, encode };
+export default { encodingExists, decode, encode, getDecoder };
