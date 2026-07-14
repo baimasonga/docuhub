@@ -19,7 +19,7 @@ NODE_ENV = "production"
 "iconv-lite" = "./worker/iconv-lite-stub.js"
 
 # Required secrets (set with `wrangler secret put` or in the dashboard):
-#   SUPABASE_URL                 https://<ref>.supabase.co
-#   SUPABASE_SERVICE_ROLE_KEY    Supabase service-role key (durable persistence + storage)
+#   SUPABASE_URL                 https://onqonmzzcgobvllkothg.supabase.co
+#   SUPABASE_SERVICE_ROLE_KEY    eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ucW9ubXp6Y2dvYnZsbGtvdGhnIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MDU1ODA5OSwiZXhwIjoyMDg2MTM0MDk5fQ.D9a30BOnVyMD-SrWecyIHtOtw57OYjozvDY2qcttbew (durable persistence + storage)
 #   GEMINI_API_KEY               Optional — AI OCR/tagging (falls back to heuristics)
 #   SESSION_SECRET               Optional — overrides the cookie HMAC secret
