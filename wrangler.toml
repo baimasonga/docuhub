@@ -11,6 +11,9 @@ not_found_handling = "single-page-application"
 
 [vars]
 NODE_ENV = "production"
+# The project URL is public information (it's visible to every client);
+# only the service-role key must stay a secret.
+SUPABASE_URL = "https://onqonmzzcgobvllkothg.supabase.co"
 
 # `body-parser` pulls in iconv-lite, whose dynamic `require('streams')` breaks
 # under the Workers nodejs_compat shim. Swap it for a TextDecoder-backed stub
@@ -18,8 +21,12 @@ NODE_ENV = "production"
 [alias]
 "iconv-lite" = "./worker/iconv-lite-stub.js"
 
-# Required secrets (set with `wrangler secret put` or in the dashboard):
-#   SUPABASE_URL                 https://onqonmzzcgobvllkothg.supabase.co
-#   SUPABASE_SERVICE_ROLE_KEY    eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ucW9ubXp6Y2dvYnZsbGtvdGhnIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MDU1ODA5OSwiZXhwIjoyMDg2MTM0MDk5fQ.D9a30BOnVyMD-SrWecyIHtOtw57OYjozvDY2qcttbew (durable persistence + storage)
-#   GEMINI_API_KEY               Optional — AI OCR/tagging (falls back to heuristics)
+# Required secrets — set in the Cloudflare dashboard (Workers & Pages →
+# docuhub → Settings → Variables and Secrets → Add → type "Secret") or with
+# `wrangler secret put NAME`. NEVER commit secret values to this file: the
+# repo is readable by anyone with repo access and git history is forever.
+#   SUPABASE_SERVICE_ROLE_KEY    Supabase service-role key (durable persistence + storage)
+#   INITIAL_ADMIN_PASSWORD       Optional — first-boot admin password (default ChangeMe!2026, change forced on first login)
 #   SESSION_SECRET               Optional — overrides the cookie HMAC secret
+#   RESEND_API_KEY               Optional — enables email notifications
+#   GEMINI_API_KEY               Optional — AI OCR/tagging (falls back to heuristics)
