@@ -45,7 +45,11 @@ import {
   Calendar,
   AlertTriangle,
   Copy,
-  Pencil
+  Pencil,
+  LogOut,
+  KeyRound,
+  Camera,
+  Menu
 } from 'lucide-react';
 import { 
   User, 
@@ -61,6 +65,7 @@ import {
   Institution
 } from './types';
 import Sidebar from './components/Sidebar';
+import { LoginScreen, ResetPasswordScreen, ChangePasswordModal } from './components/Auth';
 
 // Pre-packaged document content presets for OCR & tagging testing options
 const SAMPLE_PRESETS = [
@@ -160,6 +165,15 @@ export default function App() {
   // Global Workspace state
   const [users, setUsers] = useState<User[]>([]);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  // Auth/session state
+  const [authReady, setAuthReady] = useState(false);
+  const [mustChangePassword, setMustChangePassword] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  // Inline document preview modal ({id,title,fileType} of the doc being viewed)
+  const [previewDoc, setPreviewDoc] = useState<{ id: string; title: string; fileType?: string } | null>(null);
+  // Mobile: sidebar drawer visibility
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [folders, setFolders] = useState<FolderType[]>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
@@ -210,7 +224,9 @@ export default function App() {
   const [upDesc, setUpDesc] = useState('');
   const [upCategory, setUpCategory] = useState<Document['documentType']>('Other');
   const [upPresetIndex, setUpPresetIndex] = useState<number>(-1);
-  const [upCustomFile, setUpCustomFile] = useState<{ name: string; content: string; size: number; type: string } | null>(null);
+  // content = inline base64 (small files); storagePath = already uploaded
+  // straight to object storage via a signed URL (large files).
+  const [upCustomFile, setUpCustomFile] = useState<{ name: string; content?: string; storagePath?: string; size: number; type: string } | null>(null);
   const [upDept, setUpDept] = useState('');
   const [upAutoFile, setUpAutoFile] = useState(true);
   const [uploadScan, setUploadScan] = useState<{
@@ -271,51 +287,29 @@ export default function App() {
   const [createdLink, setCreatedLink] = useState<ExternalShareLink | null>(null);
   const [linkLoading, setLinkLoading] = useState(false);
 
-  // Fetch Users & Initialize. Identity is carried by an HttpOnly cookie. On
-  // mount we first restore any existing session (so a refresh or new tab keeps
-  // the current profile), and only fall back to a default profile if none.
+  // Identity is carried by an HttpOnly session cookie. On mount, restore any
+  // existing session; otherwise the login screen is shown. The users list
+  // (share/approver pickers, user management) loads once authenticated.
   useEffect(() => {
-    // Each step tolerates failure of the previous one so a single flaky
-    // request can't leave the app stuck on a blank shell with no profile.
-    const activateDefault = (data: User[]) => {
-      const staff = data.find((u: User) => u.id === 'staff-1' && u.isActive) || data.find((u: User) => u.isActive) || data[0];
-      if (!staff) return;
-      return fetch('/api/users/switch-profile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: staff.id })
+    fetch('/api/session')
+      .then(res => res.json())
+      .then(session => {
+        if (session && session.user) {
+          setCurrentUser(session.user);
+          setMustChangePassword(Boolean(session.mustChangePassword));
+        }
       })
-        .then(res => res.json())
-        .then(d => {
-          if (d.user) setCurrentUser(d.user);
-          else setCurrentUser(staff);
-        })
-        .catch(err => {
-          console.error('[bootstrap] switch-profile failed; using profile without a session cookie.', err);
-          setCurrentUser(staff);
-        });
-    };
+      .catch(err => console.error('[bootstrap] session restore failed:', err))
+      .finally(() => setAuthReady(true));
+  }, []);
+
+  useEffect(() => {
+    if (!currentUser) { setUsers([]); return; }
     fetch('/api/users')
       .then(res => res.json())
-      .then((data: User[]) => {
-        if (!Array.isArray(data)) throw new Error('Unexpected /api/users payload');
-        setUsers(data);
-        return fetch('/api/session')
-          .then(res => res.json())
-          .then(session => {
-            if (session && session.user) {
-              setCurrentUser(session.user);
-              return;
-            }
-            return activateDefault(data);
-          })
-          .catch(err => {
-            console.error('[bootstrap] session restore failed; activating default profile.', err);
-            return activateDefault(data);
-          });
-      })
+      .then((data: User[]) => { if (Array.isArray(data)) setUsers(data); })
       .catch(err => console.error('[bootstrap] failed to load users:', err));
-  }, []);
+  }, [currentUser?.id]);
 
   // Sync Documents / Folders / Stats on user switch or action reload
   const reloadData = () => {
@@ -323,9 +317,6 @@ export default function App() {
     
     // Header authentications passed to fetch scopes
     const headers = {
-      'x-user-id': currentUser.id,
-      'x-user-role': currentUser.role,
-      'x-user-department': currentUser.department
     };
 
     // Calculate filter type parameters based on view name
@@ -436,30 +427,33 @@ export default function App() {
     }, 4000);
   };
 
-  // Switch evaluated Profile user
-  const handleUserChange = (userId: string) => {
-    fetch('/api/users/switch-profile', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId })
-    })
-    .then(res => res.json())
-    .then(data => {
-      if (data.success) {
-        setCurrentUser(data.user);
+  // Called by the login screen after a successful /api/auth/login.
+  const handleLoginSuccess = (user: User, mustChange: boolean) => {
+    setCurrentUser(user);
+    setMustChangePassword(mustChange);
+    setSelectedDocId(null);
+    setDocDetail(null);
+    setCurrentView('dashboard');
+    setCurrentFolderId(null);
+    setSearchQuery('');
+    setCategoryFilter('');
+    triggerToast(`Signed in as ${user.fullName} (${user.role})`, 'success');
+  };
+
+  const handleLogout = () => {
+    fetch('/api/auth/logout', { method: 'POST' })
+      .catch(() => {})
+      .finally(() => {
+        setCurrentUser(null);
+        setMustChangePassword(false);
+        setAccountMenuOpen(false);
         setSelectedDocId(null);
         setDocDetail(null);
-        // Default to dashboard when switching profile
+        setDocuments([]);
+        setFolders([]);
+        setStats(null);
         setCurrentView('dashboard');
-        setCurrentFolderId(null);
-        setSearchQuery('');
-        setCategoryFilter('');
-        triggerToast(`Signed in as ${data.user.fullName} (${data.user.role})`, 'success');
-      } else {
-        triggerToast(data.error || 'Could not switch profile.', 'error');
-      }
-    })
-    .catch(() => triggerToast('Could not switch profile.', 'error'));
+      });
   };
 
   // Create Folder action
@@ -476,8 +470,7 @@ export default function App() {
     fetch('/api/folders', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser.id
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         name: trimmedName,
@@ -513,8 +506,7 @@ export default function App() {
     if (!window.confirm(message)) return;
 
     fetch(`/api/folders/${folder.id}`, {
-      method: 'DELETE',
-      headers: { 'x-user-id': currentUser.id }
+      method: 'DELETE'
     })
       .then(res => res.json())
       .then(data => {
@@ -534,23 +526,20 @@ export default function App() {
       .catch(() => triggerToast('Could not delete folder.', 'error'));
   };
 
-  const scanUploadCandidate = async (candidate: { fileName: string; fileType: string; fileData: string; department?: string }) => {
+  const scanUploadCandidate = async (candidate: { fileName: string; fileType: string; fileData?: string; storagePath?: string; fileSize?: number; department?: string }) => {
     if (!currentUser) return;
     setUploadScanLoading(true);
     setUploadScan(null);
     try {
       const res = await fetch('/api/documents/scan', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': currentUser.id,
-          'x-user-role': currentUser.role,
-          'x-user-department': currentUser.department
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fileName: candidate.fileName,
           fileType: candidate.fileType,
           fileData: candidate.fileData,
+          storagePath: candidate.storagePath,
+          fileSize: candidate.fileSize,
           department: candidate.department || upDept || currentUser.department
         })
       });
@@ -597,7 +586,8 @@ export default function App() {
     if (!currentUser) return;
 
     let filename = "";
-    let filedata = "";
+    let filedata: string | undefined;
+    let storagepath: string | undefined;
     let size = 0;
     let type = "text/plain";
 
@@ -608,7 +598,8 @@ export default function App() {
       size = preset.textValue.length;
     } else if (upCustomFile) {
       filename = upCustomFile.name;
-      filedata = upCustomFile.content; // text base64 or raw string
+      filedata = upCustomFile.content; // base64 (small files)
+      storagepath = upCustomFile.storagePath; // direct-uploaded (large files)
       size = upCustomFile.size;
       type = upCustomFile.type;
     } else {
@@ -623,12 +614,7 @@ export default function App() {
 
     fetch('/api/documents/upload', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser.id,
-        'x-user-role': currentUser.role,
-        'x-user-department': currentUser.department
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         title: upTitle,
         description: upDesc,
@@ -639,6 +625,7 @@ export default function App() {
         fileSize: size,
         fileType: type,
         fileData: filedata,
+        storagePath: storagepath,
         department: upDept || currentUser.department,
         autoFile: upAutoFile
       })
@@ -684,6 +671,35 @@ export default function App() {
     reader.readAsDataURL(file);
   });
 
+  // Files above this size go straight to object storage via a signed URL
+  // (no base64 JSON round-trip); small files keep the simpler inline path.
+  const DIRECT_UPLOAD_THRESHOLD = 2.5 * 1024 * 1024;
+
+  // Returns either { storagePath } (bytes already in storage) or { fileData }.
+  const prepareFilePayload = async (file: File): Promise<{ fileData?: string; storagePath?: string }> => {
+    if (file.size > DIRECT_UPLOAD_THRESHOLD) {
+      try {
+        const sign = await fetch('/api/uploads/sign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fileName: file.name, fileType: detectFileType(file) })
+        }).then(r => r.json());
+        if (sign.enabled && sign.uploadUrl) {
+          const put = await fetch(sign.uploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': file.type || 'application/octet-stream' },
+            body: file
+          });
+          if (put.ok) return { storagePath: sign.objectPath };
+          console.error('[upload] direct PUT failed:', put.status);
+        }
+      } catch (err) {
+        console.error('[upload] signed upload failed; falling back to inline:', err);
+      }
+    }
+    return { fileData: await readFileAsBase64(file) };
+  };
+
   const detectFileType = (file: File): string => {
     if (file.type) return file.type;
     const ext = file.name.split('.').pop()?.toLowerCase();
@@ -705,18 +721,26 @@ export default function App() {
   };
 
   const setSelectedUploadFile = async (file: File) => {
-    const base64Content = await readFileAsBase64(file);
+    const payload = await prepareFilePayload(file);
     setUpCustomFile({
       name: file.name,
       size: file.size,
       type: detectFileType(file),
-      content: base64Content
+      content: payload.fileData,
+      storagePath: payload.storagePath
     });
     setUpTitle(file.name.replace(/\.[^/.]+$/, ""));
     setUpPresetIndex(-1);
     setUpDesc('');
     setUpCategory('Other');
-    await scanUploadCandidate({ fileName: file.name, fileType: detectFileType(file), fileData: base64Content, department: upDept || currentUser?.department });
+    await scanUploadCandidate({
+      fileName: file.name,
+      fileType: detectFileType(file),
+      fileData: payload.fileData,
+      storagePath: payload.storagePath,
+      fileSize: file.size,
+      department: upDept || currentUser?.department
+    });
   };
 
   // Upload file custom handler
@@ -747,8 +771,7 @@ export default function App() {
     const res = await fetch('/api/folders', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser.id
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({ name, parentFolderId, department })
     });
@@ -759,16 +782,11 @@ export default function App() {
 
   const uploadFileRequest = async (file: File, folderId: string | null) => {
     if (!currentUser) throw new Error('Not authenticated.');
-    const fileData = await readFileAsBase64(file);
+    const payload = await prepareFilePayload(file);
     const title = file.name.replace(/\.[^/.]+$/, '') || file.name;
     const res = await fetch('/api/documents/upload', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser.id,
-        'x-user-role': currentUser.role,
-        'x-user-department': currentUser.department
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         title,
         description: `Uploaded from folder import: ${file.name}`,
@@ -777,7 +795,8 @@ export default function App() {
         fileName: file.name,
         fileSize: file.size,
         fileType: detectFileType(file),
-        fileData,
+        fileData: payload.fileData,
+        storagePath: payload.storagePath,
         department: currentUser.department,
         autoFile: false
       })
@@ -835,24 +854,18 @@ export default function App() {
     const file = e.target.files?.[0];
     if (!file || !currentUser || !selectedDocId) return;
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      const resultStr = reader.result as string;
-      const base64Content = resultStr.split(',')[1] || btoa(resultStr);
-
-      fetch(`/api/documents/${selectedDocId}/version`, {
+    prepareFilePayload(file)
+      .then(payload => fetch(`/api/documents/${selectedDocId}/version`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': currentUser.id
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fileName: file.name,
           fileSize: file.size,
           fileType: detectFileType(file),
-          fileData: base64Content
+          fileData: payload.fileData,
+          storagePath: payload.storagePath
         })
-      })
+      }))
       .then(res => res.json())
       .then(data => {
         if (data.error) {
@@ -862,14 +875,8 @@ export default function App() {
           fetchDocDetail(selectedDocId);
           reloadData();
         }
-      });
-    };
-
-    if (file.type.startsWith('image/')) {
-      reader.readAsDataURL(file);
-    } else {
-      reader.readAsText(file);
-    }
+      })
+      .catch(() => triggerToast('Version upload failed. Please try again.', 'error'));
   };
 
   // Direct comments action
@@ -880,9 +887,7 @@ export default function App() {
     fetch('/api/comments', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser.id,
-        'x-user-role': currentUser.role
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         documentId: selectedDocId,
@@ -906,8 +911,7 @@ export default function App() {
     if (!currentUser) return;
 
     fetch(`/api/documents/${docId}/star`, {
-      method: 'POST',
-      headers: { 'x-user-id': currentUser.id }
+      method: 'POST'
     })
     .then(res => res.json())
     .then(data => {
@@ -1069,8 +1073,7 @@ export default function App() {
     if (!currentUser) return;
 
     fetch(`/api/documents/${docId}/delete`, {
-      method: 'POST',
-      headers: { 'x-user-id': currentUser.id }
+      method: 'POST'
     })
     .then(res => res.json())
     .then(data => {
@@ -1088,8 +1091,7 @@ export default function App() {
     if (!currentUser) return;
 
     fetch(`/api/documents/${docId}/restore`, {
-      method: 'POST',
-      headers: { 'x-user-id': currentUser.id }
+      method: 'POST'
     })
     .then(res => res.json())
     .then(data => {
@@ -1110,8 +1112,7 @@ export default function App() {
     }
 
     fetch(`/api/documents/${docId}/permanently-delete`, {
-      method: 'POST',
-      headers: { 'x-user-id': currentUser.id }
+      method: 'POST'
     })
     .then(res => res.json())
     .then(data => {
@@ -1128,8 +1129,7 @@ export default function App() {
     if (!currentUser) return;
 
     fetch(`/api/documents/${docId}/archive`, {
-      method: 'POST',
-      headers: { 'x-user-id': currentUser.id }
+      method: 'POST'
     })
     .then(res => res.json())
     .then(data => {
@@ -1148,8 +1148,7 @@ export default function App() {
     fetch(`/api/documents/${selectedDocId}/request-approval`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser.id
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         approverId: approvalApproverId,
@@ -1182,9 +1181,7 @@ export default function App() {
     fetch(`/api/approvals/${targetId}/decide`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser.id,
-        'x-user-role': currentUser.role
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         status,
@@ -1221,8 +1218,7 @@ export default function App() {
     fetch(`/api/documents/${selectedDocId}/share`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': currentUser.id
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         targetUserId: shareTargetUserId,
@@ -1245,8 +1241,7 @@ export default function App() {
   const handleRevokeExternalLink = (token: string) => {
     if (!currentUser) return;
     fetch(`/api/external-link/${token}/revoke`, {
-      method: 'POST',
-      headers: { 'x-user-id': currentUser.id }
+      method: 'POST'
     })
     .then(res => res.json())
     .then(data => {
@@ -1281,6 +1276,24 @@ export default function App() {
   const singleSelectedDoc = selectedDocs.length === 1 ? selectedDocs[0] : null;
   const selectionMenuOpen = openMenuId === '__selection-toolbar';
 
+  // ---- Auth gates (all hooks are declared above; safe to return early) ----
+  const resetToken = typeof window !== 'undefined' && window.location.pathname === '/reset-password'
+    ? new URLSearchParams(window.location.search).get('token') || ''
+    : '';
+  if (resetToken) {
+    return <ResetPasswordScreen token={resetToken} onDone={() => { window.location.href = '/'; }} />;
+  }
+  if (!authReady) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <RefreshCw className="w-6 h-6 text-indigo-400 animate-spin" />
+      </div>
+    );
+  }
+  if (!currentUser) {
+    return <LoginScreen onLogin={handleLoginSuccess} />;
+  }
+
   return (
     <div className="flex h-screen bg-[#F8FAFC] font-sans text-slate-800 overflow-hidden">
       
@@ -1291,6 +1304,49 @@ export default function App() {
           {notification.type === 'error' && <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />}
           {notification.type === 'info' && <Sparkles className="w-4 h-4 text-indigo-500 shrink-0" />}
           <span className="text-xs font-semibold text-slate-700">{notification.text}</span>
+        </div>
+      )}
+
+      {/* Forced (first login) or user-initiated password change */}
+      {(mustChangePassword || showChangePassword) && (
+        <ChangePasswordModal
+          forced={mustChangePassword}
+          hasPassword={true}
+          onClose={() => setShowChangePassword(false)}
+          onChanged={() => {
+            setMustChangePassword(false);
+            setShowChangePassword(false);
+            triggerToast('Password updated.', 'success');
+          }}
+        />
+      )}
+
+      {/* Inline document preview (image / PDF / text) */}
+      {previewDoc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4" onClick={() => setPreviewDoc(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+              <div className="flex items-center space-x-2 min-w-0">
+                <Eye className="w-4 h-4 text-indigo-500 shrink-0" />
+                <span className="text-xs font-bold text-slate-700 truncate">{previewDoc.title}</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <a href={`/api/documents/${previewDoc.id}/download`} target="_blank" rel="noreferrer"
+                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 rounded-lg text-[10px] font-bold text-slate-600 flex items-center space-x-1">
+                  <Download className="w-3 h-3" /><span>Download</span>
+                </a>
+                <button onClick={() => setPreviewDoc(null)}
+                  className="p-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-slate-500">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+            <iframe
+              title={`Preview: ${previewDoc.title}`}
+              src={`/api/documents/${previewDoc.id}/preview`}
+              className="flex-1 w-full bg-slate-50"
+            />
+          </div>
         </div>
       )}
 
@@ -1311,17 +1367,22 @@ export default function App() {
         </div>
       )}
 
-      {/* Main Workspace Sidebar */}
-      {currentUser && (
-        <Sidebar 
+      {/* Main Workspace Sidebar — static on desktop, slide-over drawer on mobile */}
+      {mobileNavOpen && (
+        <div className="fixed inset-0 z-40 bg-slate-900/40 md:hidden" onClick={() => setMobileNavOpen(false)} />
+      )}
+      <div className={`${mobileNavOpen ? 'fixed inset-y-0 left-0 z-50 shadow-2xl' : 'hidden'} md:static md:block md:z-auto md:shadow-none h-full`}>
+        <Sidebar
           currentView={currentView}
           onViewChange={(view) => {
             setCurrentView(view);
+            setMobileNavOpen(false);
             if (view !== 'my-drive') {
               setCurrentFolderId(null);
             }
           }}
           onOpenUpload={() => {
+            setMobileNavOpen(false);
             setUpPresetIndex(-1);
             setUpTitle('');
             setUpDesc('');
@@ -1332,6 +1393,7 @@ export default function App() {
             setShowUploadModal(true);
           }}
           onOpenCreateFolder={() => {
+            setMobileNavOpen(false);
             setFolderName('');
             setFolderScopeDept(currentUser.department);
             setShowFolderModal(true);
@@ -1339,14 +1401,23 @@ export default function App() {
           pendingWithMeCount={pendingApprovalsCount}
           currentUser={currentUser}
         />
-      )}
+      </div>
 
       {/* Center Console Container */}
       <div className="flex-1 flex flex-col overflow-hidden">
         
         {/* Universal Space Navigation Bar */}
-        <header className="h-16 bg-white border-b border-slate-150 flex items-center justify-between px-8 shrink-0">
-          
+        <header className="h-16 bg-white border-b border-slate-150 flex items-center justify-between px-4 md:px-8 shrink-0 space-x-3">
+
+          {/* Mobile nav toggle */}
+          <button
+            onClick={() => setMobileNavOpen(true)}
+            className="md:hidden p-2 rounded-xl bg-slate-100 text-slate-500 hover:bg-slate-200 shrink-0"
+            aria-label="Open navigation"
+          >
+            <Menu className="w-4 h-4" />
+          </button>
+
           {/* Universal Full text & intelligent Tag search query */}
           <div className="flex-1 max-w-xl relative">
             <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-400">
@@ -1389,20 +1460,43 @@ export default function App() {
 
             <span className="text-slate-300 w-px h-5">|</span>
 
-            {/* Profile switch trigger */}
-            <div className="flex items-center space-x-2">
-              <span className="text-[10px] font-mono tracking-wider font-semibold text-slate-400 uppercase">Test profile:</span>
-              <select
-                value={currentUser?.id || ''}
-                onChange={(e) => handleUserChange(e.target.value)}
-                className="bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-1.5 text-[11px] font-semibold text-indigo-700 outline-none transition-all hover:bg-indigo-100"
+            {/* Account menu */}
+            <div className="relative">
+              <button
+                onClick={() => setAccountMenuOpen(o => !o)}
+                className="flex items-center space-x-2 bg-indigo-50 border border-indigo-100 rounded-xl pl-1.5 pr-3 py-1.5 hover:bg-indigo-100 transition-all"
               >
-                {users.map(u => (
-                  <option key={u.id} value={u.id} disabled={!u.isActive}>
-                    {u.fullName} ({u.role}{!u.isActive ? ' · inactive' : ''})
-                  </option>
-                ))}
-              </select>
+                <span className="w-6 h-6 rounded-lg bg-indigo-600 text-white text-[10px] font-bold flex items-center justify-center">
+                  {currentUser.fullName.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()}
+                </span>
+                <span className="text-[11px] font-semibold text-indigo-700 hidden sm:block">
+                  {currentUser.fullName}
+                </span>
+              </button>
+              {accountMenuOpen && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setAccountMenuOpen(false)} />
+                  <div className="absolute right-0 top-full mt-1.5 w-56 bg-white border border-slate-100 rounded-xl shadow-xl z-40 overflow-hidden text-xs">
+                    <div className="px-4 py-3 border-b border-slate-50 bg-slate-50/50">
+                      <p className="font-bold text-slate-800">{currentUser.fullName}</p>
+                      <p className="text-[10px] text-slate-400 truncate">{currentUser.email}</p>
+                      <p className="text-[9px] font-mono uppercase tracking-wider text-indigo-500 mt-1">{currentUser.role} · {currentUser.department}</p>
+                    </div>
+                    <button
+                      onClick={() => { setAccountMenuOpen(false); setShowChangePassword(true); }}
+                      className="w-full px-4 py-2.5 flex items-center space-x-2.5 hover:bg-slate-50 text-slate-600"
+                    >
+                      <KeyRound className="w-3.5 h-3.5 text-slate-400" /><span>Change password</span>
+                    </button>
+                    <button
+                      onClick={handleLogout}
+                      className="w-full px-4 py-2.5 flex items-center space-x-2.5 hover:bg-rose-50 text-rose-600 border-t border-slate-50"
+                    >
+                      <LogOut className="w-3.5 h-3.5" /><span>Sign out</span>
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
 
           </div>
@@ -2018,6 +2112,9 @@ export default function App() {
                                             <button onClick={(e) => { e.stopPropagation(); setOpenMenuId(null); setSelectedDocId(doc.id); }} className="w-full px-3 py-2 flex items-center space-x-2.5 hover:bg-slate-50">
                                               <Eye className="w-3.5 h-3.5 text-slate-400" /><span>Open</span>
                                             </button>
+                                            <button onClick={(e) => { e.stopPropagation(); setPreviewDoc({ id: doc.id, title: doc.title, fileType: doc.fileType }); setOpenMenuId(null); }} className="w-full px-3 py-2 flex items-center space-x-2.5 hover:bg-slate-50">
+                                              <Eye className="w-3.5 h-3.5 text-slate-400" /><span>Preview</span>
+                                            </button>
                                             <button onClick={(e) => { handleDownload(doc.id, e); setOpenMenuId(null); }} className="w-full px-3 py-2 flex items-center space-x-2.5 hover:bg-slate-50">
                                               <Download className="w-3.5 h-3.5 text-slate-400" /><span>Download</span>
                                             </button>
@@ -2248,16 +2345,25 @@ export default function App() {
               </div>
             </div>
             
-            <button 
-              onClick={() => {
-                setSelectedDocId(null);
-                setDocDetail(null);
-              }}
-              className="p-1 px-2.5 bg-slate-200/50 text-slate-500 rounded-lg hover:bg-slate-200 text-[9px] font-bold flex items-center space-x-1"
-            >
-              <X className="w-3.5 h-3.5" />
-              <span>Close</span>
-            </button>
+            <div className="flex items-center space-x-1.5">
+              <button
+                onClick={() => setPreviewDoc({ id: docDetail.document.id, title: docDetail.document.title, fileType: docDetail.document.fileType })}
+                className="p-1 px-2.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 text-[9px] font-bold flex items-center space-x-1"
+              >
+                <Eye className="w-3.5 h-3.5" />
+                <span>Preview</span>
+              </button>
+              <button
+                onClick={() => {
+                  setSelectedDocId(null);
+                  setDocDetail(null);
+                }}
+                className="p-1 px-2.5 bg-slate-200/50 text-slate-500 rounded-lg hover:bg-slate-200 text-[9px] font-bold flex items-center space-x-1"
+              >
+                <X className="w-3.5 h-3.5" />
+                <span>Close</span>
+              </button>
+            </div>
           </div>
 
           <div className="flex-1 overflow-y-auto p-5 space-y-5">
@@ -2583,16 +2689,28 @@ export default function App() {
                   Option B: Custom File Uploader (.txt, .pdf, .jpg, .png etc.)
                 </label>
                 <div className="border-2 border-dashed border-slate-200 hover:border-indigo-300 rounded-xl p-4 text-center cursor-pointer relative bg-slate-50/50 hover:bg-indigo-50/10">
-                  <input 
-                    type="file" 
-                    onChange={handleCustomFileChange} 
-                    className="absolute inset-0 opacity-0 cursor-pointer" 
+                  <input
+                    type="file"
+                    onChange={handleCustomFileChange}
+                    className="absolute inset-0 opacity-0 cursor-pointer"
                   />
                   <Upload className="w-5 h-5 text-slate-400 mx-auto mb-1" />
                   <p className="text-[10px] text-slate-400">
                     {upCustomFile ? `Selected: ${upCustomFile.name}` : `Drag and drop file or click browse`}
                   </p>
                 </div>
+                {/* Mobile document scan: opens the camera on phones/tablets */}
+                <label className="flex items-center justify-center space-x-1.5 w-full border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/30 rounded-xl py-2 cursor-pointer text-[10px] font-bold text-slate-500">
+                  <Camera className="w-3.5 h-3.5 text-indigo-500" />
+                  <span>Scan with camera</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handleCustomFileChange}
+                    className="hidden"
+                  />
+                </label>
               </div>
 
               {/* Title Input */}
@@ -3122,6 +3240,8 @@ function UserManagementView({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // Freshly issued temporary credentials, shown once after create/reset.
+  const [issuedCreds, setIssuedCreds] = useState<{ name: string; email: string; tempPassword: string; emailSent: boolean } | null>(null);
   const canManage = currentUser.role === 'Admin';
   const activeUsers = users.filter(u => u.isActive).length;
   const adminUsers = users.filter(u => u.role === 'Admin' && u.isActive).length;
@@ -3160,6 +3280,9 @@ function UserManagementView({
           return;
         }
         onToast(editingId ? 'User profile updated.' : 'User profile created.', 'success');
+        if (!editingId && data.tempPassword) {
+          setIssuedCreds({ name: data.fullName, email: data.email, tempPassword: data.tempPassword, emailSent: Boolean(data.emailSent) });
+        }
         reset();
         refreshUsers(data);
       })
@@ -3180,6 +3303,19 @@ function UserManagementView({
       isActive: user.isActive
     });
     setError('');
+  };
+
+  const resetPassword = (user: User) => {
+    if (!canManage) return;
+    if (!window.confirm(`Reset the password for ${user.fullName}? Their current password stops working immediately.`)) return;
+    fetch(`/api/users/${user.id}/reset-password`, { method: 'POST' })
+      .then(res => res.json())
+      .then((data) => {
+        if (data.error) return onToast(data.error, 'error');
+        setIssuedCreds({ name: user.fullName, email: user.email, tempPassword: data.tempPassword, emailSent: Boolean(data.emailSent) });
+        onToast(`Password reset for ${user.fullName}.`, 'success');
+      })
+      .catch(() => onToast('Could not reset the password.', 'error'));
   };
 
   const toggleActive = (user: User) => {
@@ -3222,7 +3358,23 @@ function UserManagementView({
 
       {!canManage && (
         <div className="bg-amber-50 border border-amber-100 text-amber-700 rounded-2xl px-4 py-3 text-xs font-semibold">
-          User records are read-only for your role. Switch to an Admin profile to create or edit users.
+          User records are read-only for your role. Only an Admin can create or edit users.
+        </div>
+      )}
+
+      {issuedCreds && (
+        <div className="bg-indigo-50 border border-indigo-100 rounded-2xl px-4 py-3 text-xs flex items-start justify-between gap-3">
+          <div>
+            <p className="font-bold text-indigo-800">Temporary password for {issuedCreds.name}</p>
+            <p className="text-indigo-600 mt-1">
+              <code className="bg-white border border-indigo-100 rounded-md px-2 py-0.5 font-mono text-[11px] select-all">{issuedCreds.tempPassword}</code>
+              <span className="ml-2 text-[10px] text-indigo-400">
+                {issuedCreds.emailSent ? `Also emailed to ${issuedCreds.email}.` : 'Share it securely — it is shown only once.'}
+              </span>
+            </p>
+            <p className="text-[10px] text-indigo-400 mt-1">They'll be asked to choose their own password at first sign-in.</p>
+          </div>
+          <button onClick={() => setIssuedCreds(null)} className="p-1 text-indigo-300 hover:text-indigo-500"><X className="w-4 h-4" /></button>
         </div>
       )}
 
@@ -3268,6 +3420,9 @@ function UserManagementView({
                       <div className="inline-flex items-center space-x-1">
                         <button onClick={() => edit(user)} disabled={!canManage} className="p-2 rounded-lg hover:bg-indigo-50 text-slate-400 hover:text-indigo-600 disabled:opacity-40" title="Edit user">
                           <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => resetPassword(user)} disabled={!canManage} className="p-2 rounded-lg hover:bg-amber-50 text-slate-400 hover:text-amber-600 disabled:opacity-40" title="Reset password">
+                          <KeyRound className="w-3.5 h-3.5" />
                         </button>
                         <button onClick={() => toggleActive(user)} disabled={!canManage || user.id === currentUser.id} className="px-2 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 text-[10px] font-bold text-slate-500 disabled:opacity-40">
                           {user.isActive ? 'Disable' : 'Enable'}

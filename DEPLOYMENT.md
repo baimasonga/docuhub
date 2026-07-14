@@ -1,126 +1,125 @@
-# Deploying Chore Box DMS to Railway
+# Deploying Chore Box DMS
 
-Chore Box DMS is a single Express server that serves both the API and the compiled
-React SPA. Data persists to **Supabase** when configured, or falls back to a
-local JSON file.
+Chore Box DMS is a single Express server (`server.ts`) that serves both the API
+and the compiled React SPA. It runs in two environments:
+
+- **Cloudflare Workers** (current production): `worker/index.ts` bridges
+  requests into the Express app via `cloudflare:node`; static SPA assets are
+  served from the Workers ASSETS binding (`dist-pages`).
+- **Plain node** (Railway or any container host): `node dist/server.mjs`.
+
+Data persists to **Supabase Postgres** (one table per entity — see
+`supabase/migrations/`) with file binaries in **Supabase Storage**. Without
+Supabase configured, the server falls back to an in-memory store with a local
+JSON file (local development only — not durable and not safe for multiple
+instances).
 
 ## How the build works
 
 | Step | What happens |
 |------|-------------|
-| `npm run build` | Vite compiles the React SPA into `dist/` and esbuild bundles the server into `dist/server.mjs` |
-| `npm start` | Runs `NODE_ENV=production node dist/server.mjs` — serves the SPA + API from one process |
+| `npm run build` | Vite compiles the SPA into `dist/` and `dist-pages/`, esbuild bundles the server into `dist/server.mjs` |
+| `npm start` | Runs `NODE_ENV=production node dist/server.mjs` (node hosting) |
+| `npx wrangler deploy` | Deploys the Worker + static assets (Cloudflare) |
+| `npm test` | API integration tests against the in-memory store |
 
-## Files already configured
+## One-time setup
 
-- **`railway.json`** — tells Railway to build with `npm run build` and start with `node dist/server.mjs`
-- **`package.json`** — `engines.node >= 20`, `start` script for Railway
-- **`server.ts`** — binds to `process.env.PORT`, serves `dist/` in production, has `/api/health` for health checks
+### 1. Supabase
 
-## Railway setup (one-time)
+1. Create (or restore) a Supabase project.
+2. Apply the schema: paste `supabase/migrations/0001_relational_schema.sql`
+   into the SQL editor and run it (or `supabase db push` with the CLI).
+3. Copy the **Project URL** and the **service_role key** from
+   Project Settings → API.
 
-1. **New project** → *Deploy from GitHub repo* → select `baimasonga/docuhub`, branch `main`
-2. **Environment variables** (Service → Variables):
+On first boot against an empty schema the server automatically imports the
+legacy single-JSONB datastore (`docuhub_state`) if one exists, otherwise it
+seeds the default institution and admin account.
 
-   | Variable | Value | Notes |
-   |---|---|---|
-   | `SUPABASE_URL` | `https://<ref>.supabase.co` | Supabase → Project Settings → API → Project URL |
-   | `SUPABASE_SERVICE_ROLE_KEY` | `<service_role secret>` | Same page — keep secret, server-side only |
-   | `GEMINI_API_KEY` | `<your key>` | Optional — OCR/tagging falls back to heuristics without it |
+### 2. Environment variables / secrets
 
-   > Do **not** set `PORT` — Railway injects it automatically.
+Set these on the host (Cloudflare: `wrangler secret put NAME` or the
+dashboard; Railway: service variables):
 
-3. **Deploy** — Railway auto-builds via Nixpacks. Watch for `VaultDMS Full-Stack Engine booting on port: <PORT>` in the logs.
+| Variable | Required | Notes |
+|---|---|---|
+| `SUPABASE_URL` | yes (prod) | `https://<ref>.supabase.co` |
+| `SUPABASE_SERVICE_ROLE_KEY` | yes (prod) | Server-side only; never expose to clients |
+| `SESSION_SECRET` | recommended | HMAC key for login cookies. Defaults to the service-role key |
+| `INITIAL_ADMIN_PASSWORD` | recommended | First-boot password for the seeded admin. Defaults to `ChangeMe!2026` (a change is forced at first login) |
+| `RESEND_API_KEY` | optional | Enables email (invites, approvals, shares, password resets) via [Resend](https://resend.com). Without it, emails are logged and skipped |
+| `EMAIL_FROM` | optional | Sender, e.g. `DocuHub <docs@yourdomain.com>`. Defaults to Resend's shared onboarding sender |
+| `APP_URL` | optional | Base URL used in email links, e.g. `https://docuhub.example.workers.dev`. Defaults to the request host |
+| `GEMINI_API_KEY` | optional | AI OCR/tagging; falls back to local heuristics |
+| `ALLOWED_EMAIL_DOMAIN` | optional | Restrict user emails to one domain, e.g. `avdp.org.sl`. Unset = any valid email |
 
-4. **Verify**:
-   ```
-   curl https://<your-app>.up.railway.app/api/health
-   # {"status":"ok",...}
-   ```
+### 3. First login
 
-## Local production smoke test
+Sign in with the seeded admin (`mohamedbangura@avdp.org.sl`) and the
+`INITIAL_ADMIN_PASSWORD`. You'll be asked to choose your own password, then
+create the rest of your users from **User Management** — each new user gets a
+one-time temporary password (shown once, and emailed when email is enabled).
+
+Users imported from the legacy datastore have no password; use the
+**Reset password** button in User Management to issue them temp passwords.
+
+## Cloudflare Workers (production)
+
+`wrangler.toml` is already configured (Worker entry `worker/index.ts`, assets
+from `dist-pages`, `nodejs_compat`). Deploys run:
+
+```bash
+npm run build && npx wrangler deploy
+```
+
+The Workers build integration does this automatically on pushes to `main`.
+
+## Railway / node hosting
+
+1. **New project** → *Deploy from GitHub repo* → `baimasonga/docuhub`, branch `main`
+2. Set the environment variables above (do **not** set `PORT`; Railway injects it)
+3. Railway builds via Nixpacks (`npm run build`, `node dist/server.mjs`)
+4. Verify: `curl https://<your-app>/api/health`
+
+## Local development
 
 ```bash
 npm install
-npm run build
-PORT=3000 npm start
-# open http://localhost:3000
+npm run dev        # Express + Vite dev server on :3000 (in-memory store)
+npm test           # API integration tests
 ```
+
+Sign in locally with the seeded admin and `ChangeMe!2026` (or set
+`INITIAL_ADMIN_PASSWORD` in `.env`).
 
 ## Architecture notes
 
-- **File storage**: file binaries are offloaded to a private **Supabase Storage**
-  bucket (`documents`, auto-created at startup) and served via short-lived signed
-  CDN URLs. Inline base64 is kept only as a local-dev fallback and for legacy
-  data (auto-migrated to Storage in the background on first boot).
-- **Sessions** are **stateless HMAC-signed cookies** (no server store), so they
-  survive redeploys and work across multiple instances. The signing key defaults
-  to `SUPABASE_SERVICE_ROLE_KEY`; set `SESSION_SECRET` to rotate/override.
+- **Datastore**: one Postgres table per entity with a weighted full-text
+  search index (`search_tsv`) over title/description/tags/OCR text. Safe for
+  concurrent server instances / Workers isolates.
+- **File storage**: binaries live in a private Supabase Storage bucket
+  (`documents`). Small uploads (<2.5 MB) travel inline as base64 and are
+  offloaded server-side; larger files upload straight from the browser to
+  Storage via short-lived signed upload URLs (`POST /api/uploads/sign`).
+  Downloads/previews redirect to short-lived signed CDN URLs.
+- **Auth**: email + password (PBKDF2-SHA256), stateless HMAC-signed session
+  cookies (survive redeploys, no server-side session store), forced password
+  change on first login, self-serve reset links by email, admin resets, and a
+  per-process login rate limiter.
+- **Email**: transactional notifications (invite, approval requested/decided,
+  document shared, password reset) via Resend; best-effort with timeouts.
+- **PWA**: installable manifest + a minimal service worker that caches only
+  immutable build assets. The upload dialog includes a camera capture path
+  for scanning paper documents on phones.
 
 ## Remaining limitations
 
-- **Datastore metadata**: documents/folders/users still live in one JSONB row,
-  rewritten on each change — fine for a small team; normalize into Postgres
-  tables for high concurrency / large catalogs.
-- **Storage cleanup**: permanently-deleting a document doesn't yet delete its
-  Storage objects (orphans are harmless but accumulate).
-- **In-panel preview** of offloaded files relies on the download endpoint
-  (signed URL) rather than inline rendering.
-
----
-
-# Deploying the frontend to Cloudflare Pages
-
-Cloudflare Pages can host the compiled Vite React SPA from this repo. The app's
-API remains the existing Node/Express server (`server.ts`), because the current
-backend uses Express, filesystem fallbacks, Supabase service credentials, and
-large request bodies that are better kept in a Node runtime. Pages Functions in
-this repo proxy same-origin `/api/*` and `/s/*` requests from the Pages site to
-that Node API origin.
-
-## Cloudflare Pages build settings
-
-| Setting | Value |
-|---|---|
-| Build command | `npm run build:pages` (or `npm run build`) |
-| Build output directory | `dist-pages` |
-| Deploy command | *(leave blank)* |
-| Node version | `20` or newer |
-
-> ⚠️ **Do not set a deploy command.** Cloudflare Pages auto-deploys the build
-> output directory; setting a deploy command like `npx wrangler deploy` runs
-> the Workers deploy flow and fails with
-> `Missing entry-point to Worker script or to assets directory`. If your Pages
-> project currently has a custom deploy command configured, clear it under
-> **Settings → Builds & deployments → Deploy command**.
-
-## Required Pages environment variable
-
-Set this in **Workers & Pages → your Pages project → Settings → Environment variables**:
-
-| Variable | Value | Notes |
-|---|---|---|
-| `API_ORIGIN` | `https://<your-node-api-host>` | Origin running `server.ts`, for example the Railway URL. Do not include a trailing slash. |
-
-Keep the existing backend variables (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-`GEMINI_API_KEY`, `SESSION_SECRET`) on the Node API host, not in Cloudflare Pages.
-The Pages deployment only needs `API_ORIGIN`.
-
-## Deploy from the command line
-
-```bash
-npm run deploy:pages
-```
-
-The deployment uses `wrangler.toml`, which points Pages at `dist-pages`. For local
-Pages testing, run:
-
-```bash
-npm run preview:pages
-```
-
-## Routing notes
-
-- `public/_redirects` provides the SPA fallback for client-side React routes.
-- `functions/api/[[path]].ts` proxies API requests to `API_ORIGIN`.
-- `functions/s/[[path]].ts` proxies public share links to `API_ORIGIN`.
+- **Storage cleanup**: permanently deleting a document removes its rows (FK
+  cascade) but not its Storage objects yet (orphans are harmless but
+  accumulate).
+- **Login rate limiting** is per-process/per-isolate; a durable limiter is a
+  SaaS-version item.
+- **Multi-tenancy**: the schema keeps `institution_id` throughout, but the
+  app currently serves a single institution; SaaS-grade tenancy (signup,
+  per-org isolation, billing) is the next milestone.
