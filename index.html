@@ -4,10 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="apple-touch-icon" href="/favicon.svg" />
+    <!-- iOS Safari ignores SVG for apple-touch-icon (and ignores the
+         manifest entirely for "Add to Home Screen") -- needs a real PNG. -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#4f46e5" />
     <meta name="mobile-web-app-capable" content="yes" />
+    <!-- iOS Safari reads this one (not mobile-web-app-capable above) to
+         launch from the home screen without browser chrome. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Chore Box" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="description" content="Chore Box DMS — secure document management with AI-OCR tagging, versioning, approvals, and shareable links." />
     <title>Chore Box DMS</title>
