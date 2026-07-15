@@ -24,7 +24,7 @@ export async function sendEmail(opts: { to: string; subject: string; html: strin
     console.log(`[email] (disabled — set RESEND_API_KEY) Would send to ${opts.to}: "${opts.subject}"`);
     return false;
   }
-  const from = process.env.EMAIL_FROM || 'Chore Box DMS <onboarding@resend.dev>';
+  const from = process.env.EMAIL_FROM || 'AVDP Document Management System <onboarding@resend.dev>';
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
@@ -61,7 +61,7 @@ function escapeHtml(input: string): string {
 function layout(title: string, bodyHtml: string): string {
   return `<!doctype html><html><body style="margin:0;padding:0;background:#f1f5f9;font-family:Segoe UI,Arial,sans-serif">
   <div style="max-width:520px;margin:24px auto;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0">
-    <div style="background:#1e293b;color:#ffffff;padding:18px 24px;font-weight:700;font-size:16px">📁 Chore Box DMS</div>
+    <div style="background:#1e293b;color:#ffffff;padding:18px 24px;font-weight:700;font-size:16px">📁 AVDP Document Management System</div>
     <div style="padding:24px;color:#334155;font-size:14px;line-height:1.6">
       <h2 style="margin:0 0 12px;font-size:17px;color:#0f172a">${title}</h2>
       ${bodyHtml}
@@ -78,7 +78,7 @@ function button(href: string, label: string): string {
 
 export function inviteEmail(opts: { fullName: string; email: string; tempPassword: string; baseUrl: string }) {
   return {
-    subject: 'Your Chore Box DMS account is ready',
+    subject: 'Your AVDP Document Management System account is ready',
     html: layout('Welcome aboard', `
       <p>Hi ${escapeHtml(opts.fullName)},</p>
       <p>An account has been created for you. Sign in with:</p>
@@ -87,13 +87,13 @@ export function inviteEmail(opts: { fullName: string; email: string; tempPasswor
         <strong>Temporary password:</strong> <code style="font-size:15px">${escapeHtml(opts.tempPassword)}</code>
       </p>
       <p>You'll be asked to choose your own password on first login.</p>
-      ${button(opts.baseUrl, 'Open Chore Box DMS')}`)
+      ${button(opts.baseUrl, 'Open AVDP Document Management System')}`)
   };
 }
 
 export function passwordResetEmail(opts: { fullName: string; resetUrl: string }) {
   return {
-    subject: 'Reset your Chore Box DMS password',
+    subject: 'Reset your AVDP Document Management System password',
     html: layout('Password reset', `
       <p>Hi ${escapeHtml(opts.fullName)},</p>
       <p>We received a request to reset your password. This link is valid for 1 hour:</p>
@@ -104,7 +104,7 @@ export function passwordResetEmail(opts: { fullName: string; resetUrl: string })
 
 export function tempPasswordEmail(opts: { fullName: string; tempPassword: string; baseUrl: string }) {
   return {
-    subject: 'Your Chore Box DMS password was reset',
+    subject: 'Your AVDP Document Management System password was reset',
     html: layout('Password reset by an administrator', `
       <p>Hi ${escapeHtml(opts.fullName)},</p>
       <p>An administrator reset your password. Sign in with this temporary password (you'll be asked to choose a new one):</p>
@@ -125,7 +125,7 @@ export function approvalRequestedEmail(opts: {
       <p><strong>${escapeHtml(opts.requesterName)}</strong> requested your approval on
         <strong>"${escapeHtml(opts.documentTitle)}"</strong>.</p>
       ${opts.comment ? `<p style="border-left:3px solid #e2e8f0;padding-left:12px;color:#64748b">${escapeHtml(opts.comment)}</p>` : ''}
-      ${button(opts.baseUrl, 'Review in Chore Box DMS')}`)
+      ${button(opts.baseUrl, 'Review in AVDP Document Management System')}`)
   };
 }
 
@@ -153,6 +153,6 @@ export function documentSharedEmail(opts: {
       <p>Hi ${escapeHtml(opts.recipientName)},</p>
       <p><strong>${escapeHtml(opts.sharerName)}</strong> gave you <strong>${escapeHtml(opts.permissionType)}</strong> access to
         <strong>"${escapeHtml(opts.documentTitle)}"</strong>.</p>
-      ${button(opts.baseUrl, 'Open in Chore Box DMS')}`)
+      ${button(opts.baseUrl, 'Open in AVDP Document Management System')}`)
   };
 }

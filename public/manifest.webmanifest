@@ -1,6 +1,6 @@
 {
-  "name": "Chore Box DMS",
-  "short_name": "Chore Box",
+  "name": "AVDP Document Management System",
+  "short_name": "AVDP DMS",
   "description": "Secure document management with AI-OCR tagging, versioning, approvals, and shareable links.",
   "start_url": "/",
   "scope": "/",

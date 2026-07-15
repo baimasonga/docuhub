@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * Data-access layer for Chore Box DMS.
+ * Data-access layer for AVDP Document Management System.
  *
  * The server talks to a `DataStore` interface with two implementations:
  *  - MemoryStore   (server/store-memory.ts): in-memory + JSON file, used for
@@ -133,7 +133,7 @@ export const DEFAULT_INSTITUTION_ID = 'inst-smartdocs';
 export const DEFAULT_INSTITUTIONS: Institution[] = [
   {
     id: DEFAULT_INSTITUTION_ID,
-    name: 'Chore Box DMS Organization',
+    name: 'Agricultural Value Chain Development Project (AVDP)',
     units: ['Procurement', 'Finance', 'Administration', 'IT', 'Management', 'Compliance', 'Marketing'],
     categoryFolders: {
       Contract: 'Contracts',

@@ -1,6 +1,6 @@
 // Minimal service worker: cache-first for immutable build assets, network-only
 // for everything else (API responses and documents must never be cached).
-const CACHE = 'choreboxdms-assets-v1';
+const CACHE = 'avdp-dms-assets-v1';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();

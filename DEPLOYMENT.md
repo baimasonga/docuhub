@@ -1,7 +1,7 @@
-# Deploying Chore Box DMS
+# Deploying AVDP Document Management System
 
-Chore Box DMS is a single Express server (`server.ts`) that serves both the API
-and the compiled React SPA. It runs in two environments:
+AVDP Document Management System is a single Express server (`server.ts`) that
+serves both the API and the compiled React SPA. It runs in two environments:
 
 - **Cloudflare Workers** (current production): `worker/index.ts` bridges
   requests into the Express app via `cloudflare:node`; static SPA assets are

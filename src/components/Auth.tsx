@@ -32,7 +32,7 @@ function AuthShell({ children }: { children: React.ReactNode }) {
             <Vault className="w-6 h-6 text-white" />
           </div>
           <div>
-            <h1 className="text-white font-display font-extrabold text-lg leading-tight">Chore Box DMS</h1>
+            <h1 className="text-white font-display font-extrabold text-lg leading-tight">AVDP Document Management System</h1>
             <p className="text-slate-400 text-[10px] font-mono tracking-wider uppercase">Secure Workspace</p>
           </div>
         </div>

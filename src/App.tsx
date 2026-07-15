@@ -1527,7 +1527,7 @@ export default function App() {
               {/* Dynamic Greeting */}
               <div className="flex justify-between items-end">
                 <div>
-                  <h1 className="text-2xl font-display font-extrabold text-slate-900 tracking-tight">Chore Box DMS</h1>
+                  <h1 className="text-2xl font-display font-extrabold text-slate-900 tracking-tight">AVDP Document Management System</h1>
                   <p className="text-xs text-slate-400 font-medium">Secure document vault with AI-OCR tagging, role-based access, versioning, and auditable reviews.</p>
                 </div>
               </div>

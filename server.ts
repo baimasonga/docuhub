@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * Chore Box DMS API server. Runs on plain node (Railway) and on Cloudflare
+ * AVDP Document Management System API server. Runs on plain node (Railway) and on Cloudflare
  * Workers (via worker/index.ts + cloudflare:node). Persistence goes through
  * the DataStore interface (server/store.ts): Supabase Postgres in production,
  * an in-memory/JSON-file store for local dev and tests.
@@ -631,7 +631,7 @@ async function runAiOcrAndTagging(fileName: string, mimeType: string, fileDataB6
               }
             },
             {
-              text: `You are an integrated AI engine inside an enterprise Document Management System (Chore Box DMS).
+              text: `You are an integrated AI engine inside an enterprise Document Management System (AVDP Document Management System).
 This file is titled "${fileName}". It is an image.
 Analyze the image content and perform these tasks:
 1. Extract all legible printed or handwritten text (OCR). Clean it up & preserve layout or structure.
@@ -655,7 +655,7 @@ Format the output strictly as a JSON object with this shape:
         contents = {
           parts: [
             {
-              text: `You are an integrated AI engine inside Chore Box DMS. This file is titled "${fileName}".
+              text: `You are an integrated AI engine inside AVDP Document Management System. This file is titled "${fileName}".
 Here is its core raw text/data:
 "${decodedText}"
 
@@ -2336,7 +2336,7 @@ async function startServer() {
   }
 
   app.listen(PORT, () => {
-    console.log(`Chore Box DMS Full-Stack Engine booting on port: ${PORT}`);
+    console.log(`AVDP Document Management System Full-Stack Engine booting on port: ${PORT}`);
   });
 }
 
@@ -2369,7 +2369,7 @@ if (typeof process !== 'undefined' && typeof process.on === 'function' && !isWor
 // DOCUHUB_NO_LISTEN=1 lets the test suite import the app without binding.
 if (isWorkersRuntime) {
   app.listen(PORT, () => {
-    console.log(`Chore Box DMS Full-Stack Engine booting on port: ${PORT} (Workers)`);
+    console.log(`AVDP Document Management System Full-Stack Engine booting on port: ${PORT} (Workers)`);
   });
 } else if (process.env.DOCUHUB_NO_LISTEN !== '1') {
   startServer().catch((err) => {
