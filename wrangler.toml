@@ -26,6 +26,9 @@ NODE_ENV = "production"
 # The project URL is public information (it's visible to every client);
 # only the service-role key must stay a secret.
 SUPABASE_URL = "https://vwpibqvwzvqccoqceumv.supabase.co"
+# Admin-created accounts must use this domain; enforced in sanitizeUserPayload()
+# in server.ts. Not a secret -- just a policy value.
+ALLOWED_EMAIL_DOMAIN = "avdp.org.sl"
 
 # `body-parser` pulls in iconv-lite, whose dynamic `require('streams')` breaks
 # under the Workers nodejs_compat shim. Swap it for a TextDecoder-backed stub
