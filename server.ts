@@ -1312,12 +1312,13 @@ app.get('/api/documents/:id', h(async (req, res) => {
     return res.status(403).json({ error: 'You do not have access to this document.' });
   }
 
-  const [versions, comments, approvals, permissions, links] = await Promise.all([
+  const [versions, comments, approvals, permissions, links, activity] = await Promise.all([
     db().listVersions(doc.id),
     db().listCommentsForDocument(doc.id),
     db().listApprovalsForDocument(doc.id),
     db().listPermissionsForDocument(doc.id),
-    db().listActiveLinksForDocument(doc.id)
+    db().listActiveLinksForDocument(doc.id),
+    db().listLogsForDocument(doc.id)
   ]);
 
   res.json({
@@ -1326,7 +1327,8 @@ app.get('/api/documents/:id', h(async (req, res) => {
     comments,
     approvals,
     permissions,
-    externalLinks: links.map(publicLink)
+    externalLinks: links.map(publicLink),
+    activity
   });
 }));
 
