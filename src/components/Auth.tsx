@@ -8,7 +8,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Vault, Lock, Mail, KeyRound, ArrowLeft, CheckCircle2, AlertCircle, X } from 'lucide-react';
+import { Lock, Mail, KeyRound, ArrowLeft, CheckCircle2, AlertCircle, X } from 'lucide-react';
 import { User } from '../types';
 
 async function postJson(url: string, body: unknown): Promise<any> {
@@ -27,14 +27,11 @@ function AuthShell({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4"
       style={{ backgroundImage: 'radial-gradient(ellipse at top, #1e293b 0%, #0f172a 60%)' }}>
       <div className="w-full max-w-sm">
-        <div className="flex items-center justify-center space-x-2.5 mb-6">
-          <div className="p-2.5 bg-indigo-600 rounded-xl shadow-lg shadow-indigo-900/40">
-            <Vault className="w-6 h-6 text-white" />
+        <div className="flex flex-col items-center mb-6 space-y-2">
+          <div className="bg-white rounded-xl p-2.5 shadow-lg shadow-indigo-900/40">
+            <img src="/avdp-logo.jpg" alt="AVDP — Agricultural Value Chain Development Project" className="h-11 w-auto" />
           </div>
-          <div>
-            <h1 className="text-white font-display font-extrabold text-lg leading-tight">AVDP Document Management System</h1>
-            <p className="text-slate-400 text-[10px] font-mono tracking-wider uppercase">Secure Workspace</p>
-          </div>
+          <p className="text-slate-400 text-[10px] font-mono tracking-wider uppercase">Document Management System · Secure Workspace</p>
         </div>
         <div className="bg-white rounded-2xl shadow-2xl p-6">{children}</div>
         <p className="text-center text-slate-500 text-[10px] mt-4">

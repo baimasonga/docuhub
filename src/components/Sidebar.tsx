@@ -16,7 +16,6 @@ import {
   ShieldCheck,
   History,
   FileHeart,
-  Vault,
   LayoutDashboard,
   Settings,
   UserCog
@@ -66,14 +65,9 @@ export default function Sidebar({
   return (
     <aside className="w-68 bg-white border-r border-slate-100 flex flex-col h-full shrink-0">
       {/* Brand area */}
-      <div className="p-6 border-b border-slate-50 flex items-center space-x-2.5">
-        <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-100">
-          <Vault className="w-5 h-5 text-white" />
-        </div>
-        <div>
-          <h1 className="font-display font-semibold text-slate-800 text-sm tracking-tight">AVDP DMS</h1>
-          <p className="text-[10px] text-slate-400 font-mono">SECURE WORKSPACE</p>
-        </div>
+      <div className="p-5 border-b border-slate-50 space-y-1.5">
+        <img src="/avdp-logo.jpg" alt="AVDP — Agricultural Value Chain Development Project" className="h-9 w-auto" />
+        <p className="text-[10px] text-slate-400 font-mono">DOCUMENT MANAGEMENT SYSTEM</p>
       </div>
 
       {/* Primary Action Button */}
