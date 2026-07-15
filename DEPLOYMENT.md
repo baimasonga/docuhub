@@ -30,7 +30,8 @@ instances).
 1. Create (or restore) a Supabase project.
 2. Apply the schema: paste `supabase/migrations/0001_relational_schema.sql`
    into the SQL editor and run it (or `supabase db push` with the CLI), then
-   do the same for `0002_secure_legacy_state_table.sql`.
+   do the same for `0002_secure_legacy_state_table.sql` and
+   `0003_schema_constraints.sql`, in that order.
 3. Copy the **Project URL** and the **service_role key** from
    Project Settings → API.
 
@@ -116,9 +117,6 @@ Sign in locally with the seeded admin and `ChangeMe!2026` (or set
 
 ## Remaining limitations
 
-- **Storage cleanup**: permanently deleting a document removes its rows (FK
-  cascade) but not its Storage objects yet (orphans are harmless but
-  accumulate).
 - **Login rate limiting** is per-process/per-isolate; a durable limiter is a
   SaaS-version item.
 - **Multi-tenancy**: the schema keeps `institution_id` throughout, but the

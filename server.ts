@@ -1545,7 +1545,21 @@ app.post('/api/documents/:id/permanently-delete', h(async (req, res) => {
     return res.status(403).json({ error: 'You do not have permission to purge this document.' });
   }
 
+  // Grab Storage object paths before the DB rows (and their storagePath
+  // columns) disappear via FK cascade.
+  const versions = await db().listVersions(doc.id);
+  const storagePaths = versions.map(v => v.storagePath).filter((p): p is string => Boolean(p));
+
   await db().deleteDocument(doc.id);
+
+  // Best-effort: the document is already gone from the app's perspective
+  // either way. A failure here just leaves an orphaned (harmless, invisible)
+  // Storage object rather than blocking the purge.
+  if (storagePaths.length > 0 && storageEnabled && supabase) {
+    const { error } = await supabase.storage.from(STORAGE_BUCKET).remove(storagePaths);
+    if (error) console.error('[storage] cleanup failed for purged document', doc.id, error.message);
+  }
+
   await logActivity(user, 'Purge Document', doc.id, doc.title, 'Permanently purged document binaries and all historic trace assets.');
   res.json({ success: true });
 }));
