@@ -67,38 +67,6 @@ import {
 import Sidebar from './components/Sidebar';
 import { LoginScreen, ResetPasswordScreen, ChangePasswordModal } from './components/Auth';
 
-// Pre-packaged document content presets for OCR & tagging testing options
-const SAMPLE_PRESETS = [
-  {
-    title: "Supplier Equipment Lease 2026",
-    fileName: "lease_agreement_draft.txt",
-    fileType: "text/plain",
-    textValue: "LEASE AGREEMENT\nLESSOR: SmartOffice Assets LLC\nLESSEE: DocuHub Enterprise Inc\nSUBJECT: High-speed server cluster rack\nMONTHLY CHARGE: $450.00\nDURATION: 24 Months commencing June 1 2026.\nTERMS: Guaranteed up-time of hardware segments, replacement within 12 hours in case of redundancy failure.",
-    category: "Contract"
-  },
-  {
-    title: "AWS Cloud Infrastructure Billing",
-    fileName: "aws_invoice_may_2026.txt",
-    fileType: "text/plain",
-    textValue: "INVOICE - Amazon Web Services Inc.\nINVOICE NUMBER: AWS-99231-A\nDATE: May 30, 2026\nCHARGES:\n1. EC2 Compute Instances: $1,420.50\n2. S3 Persistent storage: $840.10\n3. RDS Database backups: $320.00\nTOTAL SECURE CHARGE: $2,580.60\nPAYMENT DUE: June 15, 2026\nACCOUNT STATUS: Active",
-    category: "Invoice"
-  },
-  {
-    title: "Compliance Risk Assessment Draft",
-    fileName: "compliance_audit_memo.txt",
-    fileType: "text/plain",
-    textValue: "INTERNAL MEMORANDUM\nTO: Procurement officers, Finance departments\nFROM: Lead auditor Robert Sterling\nDATE: June 1, 2026\nSUBJECT: External regulatory auditing constraints for 2026.\nPlease make sure all vendor agreements of tier-1 supply lines are registered inside the centralized Document Management System for official status validation or security audits. Failure with retention guidelines will trigger default penalties.",
-    category: "Memo"
-  },
-  {
-    title: "Scanned Payment Voucher Receipt",
-    fileName: "payment_voucher_773.txt",
-    fileType: "text/plain",
-    textValue: "PAYMENT VOUCHER - OFFICIAL RECEIPT\nVoucher ID: PV-77382\nDepartment allocation: procurement-logistics\nAmount authorized: $3,200.00\nPAID TO: Global Supply Networks\nREASON: Standard container shipment customs clearing costs.\nAUTHORIZED BY: David Vance (Finance Unit Manager)",
-    category: "Support"
-  }
-];
-
 // Map a stored fileType to a MIME type so downloads open correctly
 // (e.g. images don't get mislabelled as text/plain).
 function mimeForType(fileType?: string): string {
@@ -223,7 +191,6 @@ export default function App() {
   const [upTitle, setUpTitle] = useState('');
   const [upDesc, setUpDesc] = useState('');
   const [upCategory, setUpCategory] = useState<Document['documentType']>('Other');
-  const [upPresetIndex, setUpPresetIndex] = useState<number>(-1);
   // content = inline base64 (small files); storagePath = already uploaded
   // straight to object storage via a signed URL (large files).
   const [upCustomFile, setUpCustomFile] = useState<{ name: string; content?: string; storagePath?: string; size: number; type: string } | null>(null);
@@ -571,30 +538,6 @@ export default function App() {
     }
   };
 
-  // Load Preset Details helper
-  const handlePresetSelect = (idx: number) => {
-    setUpPresetIndex(idx);
-    setUploadScan(null);
-    if (idx >= 0) {
-      const preset = SAMPLE_PRESETS[idx];
-      const encoded = btoa(preset.textValue);
-      setUpTitle(preset.title);
-      setUpDesc('');
-      setUpCategory('Other');
-      setUpCustomFile(null);
-      scanUploadCandidate({
-        fileName: preset.fileName,
-        fileType: preset.fileType,
-        fileData: encoded,
-        department: upDept || currentUser?.department
-      });
-    } else {
-      setUpTitle('');
-      setUpDesc('');
-      setUpCategory('Other');
-    }
-  };
-
   // Upload trigger
   const handleDocUpload = (e: React.FormEvent) => {
     e.preventDefault();
@@ -606,19 +549,14 @@ export default function App() {
     let size = 0;
     let type = "text/plain";
 
-    if (upPresetIndex >= 0) {
-      const preset = SAMPLE_PRESETS[upPresetIndex];
-      filename = preset.fileName;
-      filedata = btoa(preset.textValue);
-      size = preset.textValue.length;
-    } else if (upCustomFile) {
+    if (upCustomFile) {
       filename = upCustomFile.name;
       filedata = upCustomFile.content; // base64 (small files)
       storagepath = upCustomFile.storagePath; // direct-uploaded (large files)
       size = upCustomFile.size;
       type = upCustomFile.type;
     } else {
-      triggerToast('Please choose a preset template or upload a custom file configuration.', 'error');
+      triggerToast('Please choose a file to upload.', 'error');
       return;
     }
 
@@ -660,7 +598,6 @@ export default function App() {
         triggerToast(msg, 'success');
         setShowUploadModal(false);
         // reset fields
-        setUpPresetIndex(-1);
         setUpTitle('');
         setUpDesc('');
         setUpCustomFile(null);
@@ -745,7 +682,6 @@ export default function App() {
       storagePath: payload.storagePath
     });
     setUpTitle(file.name.replace(/\.[^/.]+$/, ""));
-    setUpPresetIndex(-1);
     setUpDesc('');
     setUpCategory('Other');
     await scanUploadCandidate({
@@ -771,7 +707,6 @@ export default function App() {
     e.target.value = '';
     if (!file || !currentUser) return;
 
-    setUpPresetIndex(-1);
     setUpDesc('');
     setUpCategory('Other');
     setUpDept(currentUser.department);
@@ -1398,7 +1333,6 @@ export default function App() {
           }}
           onOpenUpload={() => {
             setMobileNavOpen(false);
-            setUpPresetIndex(-1);
             setUpTitle('');
             setUpDesc('');
             setUpCategory('Other');
@@ -2673,35 +2607,11 @@ export default function App() {
             </div>
 
             <form onSubmit={handleDocUpload} className="flex-1 overflow-y-auto py-4 space-y-4 pr-1 text-xs text-slate-600 font-medium">
-              
-              {/* Preset template selector */}
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">
-                  Option A: Quick AI Document Presets (No local file required)
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  {SAMPLE_PRESETS.map((preset, idx) => (
-                    <button
-                      key={preset.title}
-                      type="button"
-                      onClick={() => handlePresetSelect(idx)}
-                      className={`p-2.5 rounded-xl text-left border transition-all ${
-                        upPresetIndex === idx 
-                          ? 'border-indigo-600 bg-indigo-50/50 text-indigo-800 font-extrabold' 
-                          : 'border-slate-100 bg-slate-50 text-slate-600 hover:bg-slate-100'
-                      }`}
-                    >
-                      <h5 className="font-bold truncate text-[11px]">{preset.title}</h5>
-                      <p className="text-[8px] text-slate-400 mt-0.5 truncate">{preset.category} Template File</p>
-                    </button>
-                  ))}
-                </div>
-              </div>
 
-              {/* Manual file upload */}
+              {/* File upload */}
               <div className="space-y-1.5">
                 <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">
-                  Option B: Custom File Uploader (.txt, .pdf, .jpg, .png etc.)
+                  File (.txt, .pdf, .jpg, .png etc.)
                 </label>
                 <div className="border-2 border-dashed border-slate-200 hover:border-indigo-300 rounded-xl p-4 text-center cursor-pointer relative bg-slate-50/50 hover:bg-indigo-50/10">
                   <input
@@ -2730,7 +2640,7 @@ export default function App() {
 
               {/* Title Input */}
               <div className="space-y-1.5">
-                <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Document Domain Title</label>
+                <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Title</label>
                 <input
                   type="text"
                   placeholder="e.g. Acme Supplier Service Level NDA"
@@ -2743,7 +2653,7 @@ export default function App() {
 
               {/* Description Input */}
               <div className="space-y-1.5">
-                <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Brief Description Summary</label>
+                <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Description</label>
                 <textarea
                   placeholder="Briefly review what the document contents are..."
                   value={upDesc}
@@ -2755,7 +2665,7 @@ export default function App() {
               <div className="grid grid-cols-2 gap-3.5">
                 {/* Category Type selector */}
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Verification Category</label>
+                  <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Category</label>
                   <select
                     value={upCategory}
                     onChange={(e) => setUpCategory(e.target.value as any)}
@@ -2798,10 +2708,10 @@ export default function App() {
                 </div>
                 <p className="text-[10px] text-slate-500 leading-relaxed">
                   {uploadScanLoading
-                    ? 'Scanning content to detect the document category and destination cabinet before upload...'
+                    ? 'Scanning file...'
                     : uploadScan
                       ? uploadScan.description
-                      : 'Choose a preset or file and DocuHub will scan it first, classify it, then route it to the matching cabinet.'}
+                      : 'Choose a file and it will be scanned, classified, and routed to the matching cabinet.'}
                 </p>
                 {uploadScan && (
                   <div className="space-y-1.5">
@@ -2835,7 +2745,7 @@ export default function App() {
                       <span>Auto-file into smart folders</span>
                     </span>
                     <span className="block text-[10px] text-slate-500 mt-0.5 leading-relaxed">
-                      The system organizes this document by unit and category based on the institution profile{orgProfile?.name ? ` (${orgProfile.name})` : ''}.
+                      Automatically place this file in the right cabinet by unit and category.
                     </span>
                   </span>
                 </label>
