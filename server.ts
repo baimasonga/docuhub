@@ -1223,6 +1223,9 @@ app.get('/api/folders', h(async (req, res) => {
 app.post('/api/folders', h(async (req, res) => {
   const user = await requireUser(req, res);
   if (!user) return;
+  if (user.role === 'Viewer') {
+    return res.status(403).json({ error: 'Viewers cannot create folders.' });
+  }
   const { name, parentFolderId, department } = req.body;
 
   if (!name || String(name).trim() === '') {
@@ -1443,6 +1446,9 @@ app.post('/api/uploads/sign', h(async (req, res) => {
 app.post('/api/documents/upload', h(async (req, res) => {
   const user = await requireUser(req, res);
   if (!user) return;
+  if (user.role === 'Viewer') {
+    return res.status(403).json({ error: 'Viewers cannot upload documents.' });
+  }
   const userId = user.id;
   const dept = user.department;
 
