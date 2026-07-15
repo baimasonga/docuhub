@@ -50,7 +50,8 @@ import {
   KeyRound,
   Camera,
   Menu,
-  UserPlus
+  UserPlus,
+  PenTool
 } from 'lucide-react';
 import { 
   User, 
@@ -67,6 +68,7 @@ import {
 } from './types';
 import Sidebar from './components/Sidebar';
 import { LoginScreen, ResetPasswordScreen, ChangePasswordModal } from './components/Auth';
+const PdfEditor = React.lazy(() => import('./components/PdfEditor'));
 
 // Map a stored fileType to a MIME type so downloads open correctly
 // (e.g. images don't get mislabelled as text/plain).
@@ -141,6 +143,8 @@ export default function App() {
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   // Inline document preview modal ({id,title,fileType} of the doc being viewed)
   const [previewDoc, setPreviewDoc] = useState<{ id: string; title: string; fileType?: string } | null>(null);
+  // Sign & Edit PDF modal target (reuses previewDoc's id/title while open)
+  const [editingPdfDoc, setEditingPdfDoc] = useState<{ id: string; title: string } | null>(null);
   // Mobile: sidebar drawer visibility
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -1282,6 +1286,13 @@ export default function App() {
                 <span className="text-xs font-bold text-slate-700 truncate">{previewDoc.title}</span>
               </div>
               <div className="flex items-center space-x-2">
+                {currentUser?.role !== 'Viewer' && (previewDoc.fileType || '').toLowerCase().includes('pdf') && (
+                  <button
+                    onClick={() => setEditingPdfDoc({ id: previewDoc.id, title: previewDoc.title })}
+                    className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 rounded-lg text-[10px] font-bold text-indigo-600 flex items-center space-x-1">
+                    <PenTool className="w-3 h-3" /><span>Sign &amp; Edit</span>
+                  </button>
+                )}
                 <a href={`/api/documents/${previewDoc.id}/download`} target="_blank" rel="noreferrer"
                   className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 rounded-lg text-[10px] font-bold text-slate-600 flex items-center space-x-1">
                   <Download className="w-3 h-3" /><span>Download</span>
@@ -1299,6 +1310,29 @@ export default function App() {
             />
           </div>
         </div>
+      )}
+
+      {editingPdfDoc && (
+        <React.Suspense fallback={
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/70 backdrop-blur-xs">
+            <div className="flex flex-col items-center text-white">
+              <RefreshCw className="w-6 h-6 animate-spin mb-2" />
+              <span className="text-xs font-semibold">Loading editor…</span>
+            </div>
+          </div>
+        }>
+          <PdfEditor
+            documentId={editingPdfDoc.id}
+            title={editingPdfDoc.title}
+            onClose={() => setEditingPdfDoc(null)}
+            onSaved={() => {
+              if (selectedDocId) fetchDocDetail(selectedDocId);
+              reloadData();
+              setPreviewDoc(null);
+            }}
+            triggerToast={triggerToast}
+          />
+        </React.Suspense>
       )}
 
       {/* Background Dim Loader for OCR tasks */}
