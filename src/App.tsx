@@ -303,6 +303,21 @@ export default function App() {
       .finally(() => setAuthReady(true));
   }, []);
 
+  // Captured once at mount (not re-derived on every render) so it survives
+  // the URL cleanup below without racing it. /api/auth/oauth/:provider/callback
+  // redirects here with ?oauthError=... on any failure (cancelled, no
+  // matching account, etc.) since it's a full-page redirect, not a fetch
+  // call the login screen could catch a JSON error from directly.
+  const [oauthError] = useState<string>(() =>
+    typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('oauthError') || '' : ''
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (new URLSearchParams(window.location.search).has('oauthError')) {
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+  }, []);
+
   useEffect(() => {
     if (!currentUser) { setUsers([]); return; }
     fetch('/api/users')
@@ -1291,7 +1306,7 @@ export default function App() {
     );
   }
   if (!currentUser) {
-    return <LoginScreen onLogin={handleLoginSuccess} />;
+    return <LoginScreen onLogin={handleLoginSuccess} initialError={oauthError} />;
   }
 
   return (

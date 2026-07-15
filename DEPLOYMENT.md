@@ -55,6 +55,9 @@ dashboard; Railway: service variables):
 | `APP_URL` | optional | Base URL used in email links, e.g. `https://docuhub.example.workers.dev`. Defaults to the request host |
 | `GEMINI_API_KEY` | optional | AI OCR/tagging; falls back to local heuristics |
 | `ALLOWED_EMAIL_DOMAIN` | optional | Restrict user emails to one domain, e.g. `avdp.org.sl`. Unset = any valid email |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | optional | Enables "Sign in with Google" (redirect URI: `<APP_URL>/api/auth/oauth/google/callback`). Only works for accounts an Admin already created (matched by email) -- not a self-registration path |
+| `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` | optional | Enables "Sign in with Microsoft" (redirect URI: `<APP_URL>/api/auth/oauth/microsoft/callback`). Same admin-created-accounts-only rule as Google |
+| `MICROSOFT_TENANT_ID` | optional | Restricts Microsoft sign-in to a single Azure AD tenant. Defaults to `common` (any work/school or personal Microsoft account) |
 
 ### 3. First login
 

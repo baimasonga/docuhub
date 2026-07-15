@@ -35,13 +35,16 @@ import { MemoryStore } from './server/store-memory';
 import { SupabaseStore } from './server/store-supabase';
 import {
   hashPassword, verifyPassword, validatePasswordStrength, generateTempPassword, sha256Hex,
-  verifySession, sessionTokenFromRequest, setSessionCookie, clearSessionCookie,
+  signSession, verifySession, sessionTokenFromRequest, setSessionCookie, clearSessionCookie,
   loginRateLimited, clearLoginAttempts
 } from './server/auth';
 import {
   sendEmail, inviteEmail, passwordResetEmail, tempPasswordEmail,
   approvalRequestedEmail, approvalDecidedEmail, documentSharedEmail
 } from './server/email';
+import {
+  OAuthProvider, isProviderConfigured, buildAuthorizeUrl, exchangeCodeForProfile
+} from './server/oauth';
 
 dotenv.config();
 
@@ -803,6 +806,78 @@ app.post('/api/auth/login', h(async (req, res) => {
   await db().updateUser(user.id, { lastLoginAt: new Date().toISOString() });
   await logActivity(user, 'Login', undefined, undefined, `${user.fullName} signed in.`);
   res.json({ success: true, user: publicUser(user), mustChangePassword: Boolean(user.mustChangePassword) });
+}));
+
+// Which OAuth providers are configured, so the frontend knows whether to
+// show a "Sign in with Google/Microsoft" button at all.
+app.get('/api/auth/oauth/config', h(async (req, res) => {
+  res.json({ google: isProviderConfigured('google'), microsoft: isProviderConfigured('microsoft') });
+}));
+
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+function isOAuthProvider(value: string): value is OAuthProvider {
+  return value === 'google' || value === 'microsoft';
+}
+
+function oauthRedirectUri(req: express.Request, provider: OAuthProvider): string {
+  return `${requestBaseUrl(req)}/api/auth/oauth/${provider}/callback`;
+}
+
+// Kicks off the provider's consent screen. `state` is a signed, expiring
+// token (reusing the same signSession/verifySession the session cookie
+// itself uses) rather than server-side memory: on Workers, the callback can
+// land on a different isolate than the one that issued `state`, so it has
+// to be self-verifying, not looked up.
+app.get('/api/auth/oauth/:provider/start', h(async (req, res) => {
+  const provider = req.params.provider;
+  if (!isOAuthProvider(provider)) return res.status(404).send('Unknown provider.');
+  if (!isProviderConfigured(provider)) {
+    return res.status(503).send(`Sign-in with ${provider === 'google' ? 'Google' : 'Microsoft'} is not configured on this server.`);
+  }
+  const state = signSession(`oauth:${provider}:${crypto.randomBytes(8).toString('hex')}`, Date.now() + OAUTH_STATE_TTL_MS);
+  res.redirect(302, buildAuthorizeUrl(provider, oauthRedirectUri(req, provider), state));
+}));
+
+// This is an alternative login method for accounts an Admin has already
+// created -- matched by email -- not a self-registration path. An email
+// with no existing dms_users row is rejected, same as every other part of
+// this app's admin-invite-only account model.
+app.get('/api/auth/oauth/:provider/callback', h(async (req, res) => {
+  const provider = req.params.provider;
+  const baseUrl = requestBaseUrl(req);
+  const failUrl = (reason: string) => `${baseUrl}/?oauthError=${encodeURIComponent(reason)}`;
+
+  if (!isOAuthProvider(provider)) return res.status(404).send('Unknown provider.');
+
+  const code = typeof req.query.code === 'string' ? req.query.code : '';
+  const state = typeof req.query.state === 'string' ? req.query.state : '';
+  const providerError = typeof req.query.error === 'string' ? req.query.error : '';
+  const providerLabel = provider === 'google' ? 'Google' : 'Microsoft';
+
+  if (providerError) return res.redirect(302, failUrl(`${providerLabel} sign-in was cancelled.`));
+  if (!code || !state) return res.redirect(302, failUrl('Missing sign-in parameters. Please try again.'));
+
+  const statePayload = verifySession(state);
+  if (!statePayload || !statePayload.startsWith(`oauth:${provider}:`)) {
+    return res.redirect(302, failUrl('This sign-in attempt expired. Please try again.'));
+  }
+
+  const profile = await exchangeCodeForProfile(provider, code, oauthRedirectUri(req, provider));
+  if (!profile) return res.redirect(302, failUrl(`Could not verify your ${providerLabel} account. Please try again.`));
+
+  const existingUser = await db().getUserByEmail(profile.email);
+  if (!existingUser) {
+    return res.redirect(302, failUrl('No account found for this email. Contact your administrator.'));
+  }
+  if (!existingUser.isActive) {
+    return res.redirect(302, failUrl('This account has been deactivated. Contact your administrator.'));
+  }
+
+  setSessionCookie(req, res, existingUser.id);
+  await db().updateUser(existingUser.id, { lastLoginAt: new Date().toISOString() });
+  await logActivity(existingUser, 'Login', undefined, undefined, `${existingUser.fullName} signed in via ${providerLabel}.`);
+  res.redirect(302, `${baseUrl}/`);
 }));
 
 app.post('/api/auth/logout', h(async (req, res) => {
