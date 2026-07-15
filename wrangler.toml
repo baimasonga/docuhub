@@ -8,6 +8,18 @@ compatibility_flags = ["nodejs_compat"]
 directory = "./dist-pages"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+# Without this, Cloudflare checks the Assets binding BEFORE running the
+# Worker's own fetch() handler for any request that looks like a page
+# navigation (Sec-Fetch-Dest: document/iframe/frame) -- e.g. the <iframe
+# src="/api/documents/:id/preview"> the document preview modal uses. Since
+# that path has no file extension and matches no literal asset,
+# not_found_handling="spa" serves index.html directly from the Assets layer,
+# and worker/index.ts's isApiPath() routing never runs at all (confirmed via
+# Cf-Cache-Status: HIT on the preview response -- it never reached the
+# Worker). Regular fetch()/XHR calls aren't navigations, so they were
+# unaffected. run_worker_first forces every request through fetch() first,
+# so isApiPath() always gets to make the /api/* vs static-asset decision.
+run_worker_first = true
 
 [vars]
 NODE_ENV = "production"
