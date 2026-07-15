@@ -49,7 +49,8 @@ import {
   LogOut,
   KeyRound,
   Camera,
-  Menu
+  Menu,
+  UserPlus
 } from 'lucide-react';
 import { 
   User, 
@@ -3303,7 +3304,7 @@ function UserManagementView({
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-4 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-4 items-start">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
           <div className="px-4 py-3 bg-slate-50/70 border-b border-slate-100 flex items-center justify-between">
             <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">Workspace People</span>
@@ -3361,9 +3362,14 @@ function UserManagementView({
           </div>
         </div>
 
-        <form onSubmit={submit} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
+        <form onSubmit={submit} className="w-full max-w-md mx-auto lg:max-w-none bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="font-display font-extrabold text-slate-800 text-sm">{editingId ? 'Edit User' : 'Create User'}</h3>
+            <div className="flex items-center space-x-2">
+              <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                <UserPlus className="w-3.5 h-3.5" />
+              </div>
+              <h3 className="font-display font-extrabold text-slate-800 text-sm">{editingId ? 'Edit User' : 'Create User'}</h3>
+            </div>
             {editingId && <button type="button" onClick={reset} className="text-[10px] font-bold text-slate-400 hover:text-slate-600">Cancel</button>}
           </div>
           {error && <div className="bg-rose-50 border border-rose-100 text-rose-600 text-[11px] font-semibold rounded-xl p-2.5">{error}</div>}
