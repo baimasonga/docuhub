@@ -70,6 +70,15 @@ import {
 import Sidebar from './components/Sidebar';
 import { LoginScreen, ResetPasswordScreen, ChangePasswordModal } from './components/Auth';
 const PdfEditor = React.lazy(() => import('./components/PdfEditor'));
+const WordPreview = React.lazy(() => import('./components/WordPreview'));
+
+// Word documents (.doc/.docx) can't be rendered by the browser the way
+// images/PDF/text can, so the preview modal routes them to WordPreview
+// instead of the generic iframe.
+function isWordDoc(fileType?: string, fileName?: string): boolean {
+  const t = `${fileType || ''} ${fileName || ''}`.toLowerCase();
+  return t.includes('word') || t.includes('docx') || t.includes('officedocument.word') || /\.docx?\b/.test(t);
+}
 
 // Map a stored fileType to a MIME type so downloads open correctly
 // (e.g. images don't get mislabelled as text/plain).
@@ -162,7 +171,7 @@ export default function App() {
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   // Inline document preview modal ({id,title,fileType} of the doc being viewed)
-  const [previewDoc, setPreviewDoc] = useState<{ id: string; title: string; fileType?: string } | null>(null);
+  const [previewDoc, setPreviewDoc] = useState<{ id: string; title: string; fileType?: string; fileName?: string } | null>(null);
   // Sign & Edit PDF modal target (reuses previewDoc's id/title while open)
   const [editingPdfDoc, setEditingPdfDoc] = useState<{ id: string; title: string } | null>(null);
   // Mobile: sidebar drawer visibility
@@ -1346,11 +1355,19 @@ export default function App() {
                 </button>
               </div>
             </div>
-            <iframe
-              title={`Preview: ${previewDoc.title}`}
-              src={`/api/documents/${previewDoc.id}/preview`}
-              className="flex-1 w-full bg-slate-50"
-            />
+            {isWordDoc(previewDoc.fileType, previewDoc.fileName) ? (
+              <React.Suspense fallback={
+                <div className="flex-1 w-full bg-slate-50 flex items-center justify-center text-slate-400 text-xs">Loading previewer…</div>
+              }>
+                <WordPreview documentId={previewDoc.id} fileName={previewDoc.fileName} />
+              </React.Suspense>
+            ) : (
+              <iframe
+                title={`Preview: ${previewDoc.title}`}
+                src={`/api/documents/${previewDoc.id}/preview`}
+                className="flex-1 w-full bg-slate-50"
+              />
+            )}
           </div>
         </div>
       )}
@@ -2141,7 +2158,7 @@ export default function App() {
                                             <button onClick={(e) => { e.stopPropagation(); setOpenMenuId(null); setSelectedDocId(doc.id); }} className="w-full px-3 py-2 flex items-center space-x-2.5 hover:bg-slate-50">
                                               <Eye className="w-3.5 h-3.5 text-slate-400" /><span>Open</span>
                                             </button>
-                                            <button onClick={(e) => { e.stopPropagation(); setPreviewDoc({ id: doc.id, title: doc.title, fileType: doc.fileType }); setOpenMenuId(null); }} className="w-full px-3 py-2 flex items-center space-x-2.5 hover:bg-slate-50">
+                                            <button onClick={(e) => { e.stopPropagation(); setPreviewDoc({ id: doc.id, title: doc.title, fileType: doc.fileType, fileName: doc.fileName }); setOpenMenuId(null); }} className="w-full px-3 py-2 flex items-center space-x-2.5 hover:bg-slate-50">
                                               <Eye className="w-3.5 h-3.5 text-slate-400" /><span>Preview</span>
                                             </button>
                                             <button onClick={(e) => { handleDownload(doc.id, e); setOpenMenuId(null); }} className="w-full px-3 py-2 flex items-center space-x-2.5 hover:bg-slate-50">
@@ -2376,7 +2393,7 @@ export default function App() {
             
             <div className="flex items-center space-x-1.5">
               <button
-                onClick={() => setPreviewDoc({ id: docDetail.document.id, title: docDetail.document.title, fileType: docDetail.document.fileType })}
+                onClick={() => setPreviewDoc({ id: docDetail.document.id, title: docDetail.document.title, fileType: docDetail.document.fileType, fileName: docDetail.document.fileName })}
                 className="p-1 px-2.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 text-[9px] font-bold flex items-center space-x-1"
               >
                 <Eye className="w-3.5 h-3.5" />
