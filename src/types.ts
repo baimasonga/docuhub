@@ -71,6 +71,10 @@ export interface Document {
   fileType?: string; // latest version MIME/extension, added by API responses
   createdAt: string;
   updatedAt: string;
+  lastAuditedAt?: string;
+  lastAuditedBy?: string;
+  lastAuditedByName?: string;
+  needsAudit?: boolean; // computed by the API: never audited, or modified since the last audit
 }
 
 export interface DocumentVersion {
@@ -167,4 +171,5 @@ export interface DashboardStats {
   pendingMyApprovalCount: number;
   totalUsers: number;
   recentUploadsCount: number;
+  needsAuditCount: number; // 0 for roles that cannot audit (Manager/Admin/Auditor only)
 }

@@ -51,7 +51,8 @@ import {
   Camera,
   Menu,
   UserPlus,
-  PenTool
+  PenTool,
+  ShieldCheck
 } from 'lucide-react';
 import { 
   User, 
@@ -332,6 +333,7 @@ export default function App() {
     if (currentView === 'trash') filterType = 'trash';
     if (currentView === 'archive') filterType = 'archive';
     if (currentView === 'shared-with-me') filterType = 'shared';
+    if (currentView === 'needs-audit') filterType = 'needs-audit';
 
     // Approvals queue is fetched from a dedicated endpoint
     if (currentView === 'pending-approval') {
@@ -856,6 +858,23 @@ export default function App() {
         }
       })
       .catch(() => triggerToast('Version upload failed. Please try again.', 'error'));
+  };
+
+  // Manager/Admin/Auditor: mark the open document as formally audited.
+  const handleAuditDocument = () => {
+    if (!currentUser || !selectedDocId) return;
+    fetch(`/api/documents/${selectedDocId}/audit`, { method: 'POST' })
+      .then(res => res.json())
+      .then(data => {
+        if (data.error) {
+          triggerToast(data.error, 'error');
+        } else {
+          triggerToast('Document marked as audited.', 'success');
+          fetchDocDetail(selectedDocId);
+          reloadData();
+        }
+      })
+      .catch(() => triggerToast('Could not mark this document as audited.', 'error'));
   };
 
   // Direct comments action
@@ -1407,6 +1426,7 @@ export default function App() {
             setShowFolderModal(true);
           }}
           pendingWithMeCount={pendingApprovalsCount}
+          needsAuditCount={stats?.needsAuditCount || 0}
           currentUser={currentUser}
         />
       </div>
@@ -1675,7 +1695,7 @@ export default function App() {
           )}
 
           {/* 2. VIEW: MY DRIVE & FILE NAVIGATOR */}
-          {(currentView === 'my-drive' || currentView === 'starred' || currentView === 'approved-files' || currentView === 'archive' || currentView === 'trash' || currentView === 'shared-with-me') && (
+          {(currentView === 'my-drive' || currentView === 'starred' || currentView === 'approved-files' || currentView === 'archive' || currentView === 'trash' || currentView === 'shared-with-me' || currentView === 'needs-audit') && (
             <div className="space-y-4">
               
               {/* Dynamic contextual title based on route view */}
@@ -1708,7 +1728,8 @@ export default function App() {
                       {currentView === 'archive' && <Archive className="w-4 h-4 text-sky-500" />}
                       {currentView === 'trash' && <Trash2 className="w-4 h-4 text-slate-400" />}
                       {currentView === 'shared-with-me' && <Clock className="w-4 h-4 text-indigo-500" />}
-                      <span>{ { 'shared-with-me': 'Shares', 'starred': 'Starred Files', 'approved-files': 'Approved Documents', 'archive': 'Archive', 'trash': 'Trash' }[currentView] ?? currentView.replace(/-/g, ' ') } Overview</span>
+                      {currentView === 'needs-audit' && <AlertTriangle className="w-4 h-4 text-amber-500" />}
+                      <span>{ { 'shared-with-me': 'Shares', 'starred': 'Starred Files', 'approved-files': 'Approved Documents', 'archive': 'Archive', 'trash': 'Trash', 'needs-audit': 'Needs Audit' }[currentView] ?? currentView.replace(/-/g, ' ') } Overview</span>
                     </span>
                   )}
                 </div>
@@ -2604,20 +2625,44 @@ export default function App() {
               </div>
             </div>
 
-            {/* File History: full audit trail for this document (creator, edits, moves, downloads, etc.) */}
+            {/* File History: full audit trail for this document. Restricted to
+                Manager/Admin/Auditor -- the server already omits `activity`
+                and blocks the standalone endpoint for other roles, this just
+                keeps the section from rendering an always-empty shell for them. */}
+            {currentUser && (currentUser.role === 'Admin' || currentUser.role === 'Manager' || currentUser.role === 'Auditor') && (
             <div className="space-y-2">
-              <button
-                type="button"
-                onClick={() => setShowFileHistory(s => !s)}
-                className="w-full flex justify-between items-center"
-              >
-                <span className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase flex items-center space-x-1.5">
-                  <History className="w-3 h-3 text-slate-400" />
-                  <span>File History</span>
-                  <span className="text-slate-300 normal-case font-sans">({docDetail.activity.length})</span>
+              <div className="flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowFileHistory(s => !s)}
+                  className="flex-1 flex justify-between items-center min-w-0"
+                >
+                  <span className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase flex items-center space-x-1.5">
+                    <History className="w-3 h-3 text-slate-400" />
+                    <span>File History</span>
+                    <span className="text-slate-300 normal-case font-sans">({docDetail.activity.length})</span>
+                  </span>
+                  <ChevronRight className={`w-3.5 h-3.5 text-slate-400 transition-transform shrink-0 ${showFileHistory ? 'rotate-90' : ''}`} />
+                </button>
+              </div>
+
+              {/* Audit status: when it was last formally audited, and by whom, with a one-click re-audit action. */}
+              <div className={`flex items-center justify-between gap-2 rounded-xl px-3 py-2 text-[10px] ${docDetail.document.needsAudit ? 'bg-amber-50 border border-amber-100' : 'bg-emerald-50 border border-emerald-100'}`}>
+                <span className={`flex items-center space-x-1.5 font-semibold ${docDetail.document.needsAudit ? 'text-amber-700' : 'text-emerald-700'}`}>
+                  {docDetail.document.needsAudit ? <AlertTriangle className="w-3 h-3 shrink-0" /> : <ShieldCheck className="w-3 h-3 shrink-0" />}
+                  <span>
+                    {docDetail.document.lastAuditedAt
+                      ? `${docDetail.document.needsAudit ? 'Needs re-audit — ' : 'Audited '}by ${docDetail.document.lastAuditedByName} on ${new Date(docDetail.document.lastAuditedAt).toLocaleDateString()}`
+                      : 'Never audited'}
+                  </span>
                 </span>
-                <ChevronRight className={`w-3.5 h-3.5 text-slate-400 transition-transform ${showFileHistory ? 'rotate-90' : ''}`} />
-              </button>
+                <button
+                  onClick={handleAuditDocument}
+                  className="px-2 py-1 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg text-[9px] font-bold text-slate-600 shrink-0"
+                >
+                  Mark as audited
+                </button>
+              </div>
 
               {showFileHistory && (
                 <div className="bg-slate-50/80 rounded-xl p-3 divide-y divide-slate-150/40 text-[11px] max-h-64 overflow-y-auto">
@@ -2645,6 +2690,7 @@ export default function App() {
                 </div>
               )}
             </div>
+            )}
 
             {/* Collaborative Conversation Comments list */}
             <div className="space-y-2">

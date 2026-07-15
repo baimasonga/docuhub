@@ -305,6 +305,17 @@ function canDeleteFolder(user: Pick<User, 'id' | 'role'>, folder: Folder): boole
   return user.role === 'Admin' || user.role === 'Manager' || folder.ownerId === user.id;
 }
 
+// File History / audit trail: restricted to Manager, Admin, and Auditor roles.
+function canAudit(user: Pick<User, 'role'>): boolean {
+  return user.role === 'Admin' || user.role === 'Manager' || user.role === 'Auditor';
+}
+
+// A document needs (re-)audit if it has never been audited, or has changed since its last audit.
+function documentNeedsAudit(doc: Document): boolean {
+  if (!doc.lastAuditedAt) return true;
+  return new Date(doc.updatedAt).getTime() > new Date(doc.lastAuditedAt).getTime();
+}
+
 // Documents this user may see, with basic filters pushed down to the store.
 async function visibleDocuments(user: Viewer, filter: DocumentFilter = {}): Promise<Document[]> {
   const docs = await db().listDocuments(filter);
@@ -362,7 +373,8 @@ function withFileMetadata<T extends Document>(doc: T, latest?: DocumentVersion):
     ...doc,
     fileName: latest?.fileName || doc.fileName || '',
     fileSize: latest?.fileSize || doc.fileSize || 0,
-    fileType: latest?.fileType || doc.fileType || ''
+    fileType: latest?.fileType || doc.fileType || '',
+    needsAudit: documentNeedsAudit(doc)
   };
 }
 
@@ -1193,7 +1205,8 @@ app.get('/api/stats', h(async (req, res) => {
     approvedCount: approved,
     pendingMyApprovalCount: pendingMine.length,
     totalUsers: users.filter(u => u.isActive).length,
-    recentUploadsCount: visibleDocs.filter(d => new Date(d.createdAt).getTime() > weekAgo).length
+    recentUploadsCount: visibleDocs.filter(d => new Date(d.createdAt).getTime() > weekAgo).length,
+    needsAuditCount: canAudit(user) ? visibleDocs.filter(documentNeedsAudit).length : 0
   };
   res.json(dashboardStats);
 }));
@@ -1299,7 +1312,14 @@ app.get('/api/documents', h(async (req, res) => {
     docs = docs.filter(d => !d.isArchived && sharedIds.has(d.id));
   }
 
-  res.json(await attachLatestFileMetadata(docs));
+  const withMeta = await attachLatestFileMetadata(docs);
+
+  if (filterType === 'needs-audit') {
+    // Restricted to Manager/Admin/Auditor -- other roles never see anything here.
+    return res.json(canAudit(user) ? withMeta.filter(d => d.needsAudit) : []);
+  }
+
+  res.json(withMeta);
 }));
 
 app.get('/api/documents/:id', h(async (req, res) => {
@@ -1318,7 +1338,7 @@ app.get('/api/documents/:id', h(async (req, res) => {
     db().listApprovalsForDocument(doc.id),
     db().listPermissionsForDocument(doc.id),
     db().listActiveLinksForDocument(doc.id),
-    db().listLogsForDocument(doc.id)
+    canAudit(user) ? db().listLogsForDocument(doc.id) : Promise.resolve([])
   ]);
 
   res.json({
@@ -1330,6 +1350,33 @@ app.get('/api/documents/:id', h(async (req, res) => {
     externalLinks: links.map(publicLink),
     activity
   });
+}));
+
+// Manager/Admin/Auditor mark a document as formally audited -- resets the
+// "needs audit" flag until the document changes again.
+app.post('/api/documents/:id/audit', h(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+  if (!canAudit(user)) {
+    return res.status(403).json({ error: 'Only Managers, Admins, and Auditors can audit documents.' });
+  }
+
+  const doc = await db().getDocument(req.params.id);
+  if (!doc) return res.status(404).json({ error: 'Document not found.' });
+  if (!(await canViewDocument(user, doc))) {
+    return res.status(403).json({ error: 'You do not have access to this document.' });
+  }
+
+  const now = new Date().toISOString();
+  const updated = await db().updateDocument(doc.id, {
+    lastAuditedAt: now,
+    lastAuditedBy: user.id,
+    lastAuditedByName: user.fullName
+  });
+  await logActivity(user, 'Audit', doc.id, doc.title, `Marked as audited by ${user.fullName} (${user.role}).`);
+
+  const versions = await db().listVersions(doc.id);
+  res.json({ success: true, document: updated ? withFileMetadata(updated, latestOf(versions)) : null });
 }));
 
 // Pre-upload scan: detected category, suggested metadata, and smart-cabinet
@@ -1964,6 +2011,9 @@ app.get('/api/activity', h(async (req, res) => {
 app.get('/api/documents/:id/activity', h(async (req, res) => {
   const user = await requireUser(req, res);
   if (!user) return;
+  if (!canAudit(user)) {
+    return res.status(403).json({ error: 'File history is restricted to Managers, Admins, and Auditors.' });
+  }
   const doc = await db().getDocument(req.params.id);
   if (!doc) return res.status(404).json({ error: 'Document not found.' });
   if (!(await canViewDocument(user, doc))) {

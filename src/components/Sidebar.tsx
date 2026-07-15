@@ -4,21 +4,22 @@
  */
 
 import React from 'react';
-import { 
-  Folder, 
-  Clock, 
-  Star, 
-  CheckSquare, 
-  Archive, 
-  Trash2, 
-  Plus, 
+import {
+  Folder,
+  Clock,
+  Star,
+  CheckSquare,
+  Archive,
+  Trash2,
+  Plus,
   Building2,
   ShieldCheck,
   History,
   FileHeart,
   LayoutDashboard,
   Settings,
-  UserCog
+  UserCog,
+  AlertTriangle
 } from 'lucide-react';
 import { User } from '../types';
 
@@ -28,6 +29,7 @@ interface SidebarProps {
   onOpenUpload: () => void;
   onOpenCreateFolder: () => void;
   pendingWithMeCount: number;
+  needsAuditCount: number;
   currentUser: User;
 }
 
@@ -37,9 +39,12 @@ export default function Sidebar({
   onOpenUpload,
   onOpenCreateFolder,
   pendingWithMeCount,
+  needsAuditCount,
   currentUser
 }: SidebarProps) {
-  
+
+  const canAudit = currentUser.role === 'Admin' || currentUser.role === 'Manager' || currentUser.role === 'Auditor';
+
   const mainNavItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'my-drive', label: 'Folder Cabinets', icon: Folder },
@@ -50,6 +55,7 @@ export default function Sidebar({
   const workflowNavItems = [
     { id: 'pending-approval', label: 'Pending Approval', icon: CheckSquare, badge: pendingWithMeCount },
     { id: 'approved-files', label: 'Approved Documents', icon: ShieldCheck },
+    ...(canAudit ? [{ id: 'needs-audit', label: 'Needs Audit', icon: AlertTriangle, badge: needsAuditCount }] : []),
     { id: 'archive', label: 'Archive', icon: Archive },
     { id: 'trash', label: 'Trash', icon: Trash2 },
   ];

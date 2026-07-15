@@ -73,7 +73,10 @@ const documentFromRow = (r: Row): Document => ({
   confidentialityLevel: r.confidentiality_level, currentVersion: r.current_version,
   isStarred: r.is_starred, isArchived: r.is_archived, isDeleted: r.is_deleted,
   tags: r.tags || [], ocrText: r.ocr_text ?? undefined,
-  createdAt: r.created_at, updatedAt: r.updated_at
+  createdAt: r.created_at, updatedAt: r.updated_at,
+  lastAuditedAt: r.last_audited_at ?? undefined,
+  lastAuditedBy: r.last_audited_by ?? undefined,
+  lastAuditedByName: r.last_audited_by_name ?? undefined
 });
 const documentToRow = (d: Partial<Document>): Row => {
   const row = omitUndefined({
@@ -84,7 +87,9 @@ const documentToRow = (d: Partial<Document>): Row => {
     current_version: d.currentVersion, is_starred: d.isStarred,
     is_archived: d.isArchived, is_deleted: d.isDeleted,
     tags: d.tags, ocr_text: d.ocrText,
-    created_at: d.createdAt, updated_at: d.updatedAt
+    created_at: d.createdAt, updated_at: d.updatedAt,
+    last_audited_at: d.lastAuditedAt, last_audited_by: d.lastAuditedBy,
+    last_audited_by_name: d.lastAuditedByName
   });
   // folderId: null is a meaningful value ("root"), not an omission.
   if ('folderId' in d) row.folder_id = d.folderId;
@@ -185,7 +190,7 @@ function omitUndefined(row: Row): Row {
 // Columns fetched for document lists/details: everything except the heavy
 // ocr_text is still needed by the UI (detail + search preview), so we fetch
 // full rows; file bytes live on document_versions, not here.
-const DOC_COLUMNS = 'id,title,description,owner_id,owner_name,department,folder_id,document_type,status,confidentiality_level,current_version,is_starred,is_archived,is_deleted,tags,ocr_text,created_at,updated_at';
+const DOC_COLUMNS = 'id,title,description,owner_id,owner_name,department,folder_id,document_type,status,confidentiality_level,current_version,is_starred,is_archived,is_deleted,tags,ocr_text,created_at,updated_at,last_audited_at,last_audited_by,last_audited_by_name';
 // Version metadata without the (potentially huge) inline file_data payload.
 const VERSION_META_COLUMNS = 'id,document_id,file_name,file_size,file_type,version_number,uploaded_by,uploaded_by_name,storage_path,created_at';
 
