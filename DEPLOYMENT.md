@@ -58,6 +58,10 @@ dashboard; Railway: service variables):
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | optional | Enables "Sign in with Google" (redirect URI: `<APP_URL>/api/auth/oauth/google/callback`). Only works for accounts an Admin already created (matched by email) -- not a self-registration path |
 | `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` | optional | Enables "Sign in with Microsoft" (redirect URI: `<APP_URL>/api/auth/oauth/microsoft/callback`). Same admin-created-accounts-only rule as Google |
 | `MICROSOFT_TENANT_ID` | optional | Restricts Microsoft sign-in to a single Azure AD tenant. Defaults to `common` (any work/school or personal Microsoft account) |
+| `IDRIVE_ACCESS_KEY_ID` / `IDRIVE_SECRET_ACCESS_KEY` | optional | S3-compatible credentials for external backups (Settings → Backup). Works with iDrive e2, Backblaze B2, Wasabi, Cloudflare R2, MinIO -- anything S3-compatible |
+| `IDRIVE_ENDPOINT` | optional | e.g. `https://<id>.idrivee2-<region>.com` |
+| `IDRIVE_BUCKET` | optional | Destination bucket name |
+| `IDRIVE_REGION` | optional | Defaults to `us-east-1`; most S3-compatible providers ignore this |
 
 ### 3. First login
 

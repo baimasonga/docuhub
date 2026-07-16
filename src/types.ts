@@ -138,6 +138,24 @@ export interface Comment {
   createdAt: string;
 }
 
+export type BackupTrigger = 'manual' | 'scheduled';
+export type BackupStatus = 'running' | 'success' | 'error';
+
+// One row per backup run to an external cloud target (e.g. iDrive e2).
+// Incremental: only file binaries created since the previous successful run
+// are re-uploaded; the metadata snapshot is re-exported in full every run.
+export interface BackupRun {
+  id: string;
+  trigger: BackupTrigger;
+  triggeredByName?: string; // set for manual runs
+  status: BackupStatus;
+  startedAt: string;
+  completedAt?: string;
+  filesUploaded: number;
+  bytesUploaded: number;
+  error?: string;
+}
+
 export interface ExternalShareLink {
   id: string;
   documentId: string;

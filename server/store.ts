@@ -25,7 +25,8 @@ import {
   ActivityLog,
   Comment,
   ExternalShareLink,
-  Institution
+  Institution,
+  BackupRun
 } from '../src/types';
 
 // Server-side auth fields. Kept out of src/types.ts so the client never sees
@@ -95,11 +96,14 @@ export interface DataStore {
   createVersion(v: DocumentVersion): Promise<DocumentVersion>;
   updateVersion(id: string, patch: Partial<DocumentVersion>): Promise<void>;
   listVersionsPendingOffload(): Promise<DocumentVersion[]>;
+  /** Every version created at/after `sinceIso`, across all documents (external backups). */
+  listVersionsCreatedSince(sinceIso: string): Promise<DocumentVersion[]>;
 
   // Share permissions
   listPermissionsForDocument(documentId: string): Promise<SharePermission[]>;
   listPermissionsForUser(userId: string): Promise<SharePermission[]>;
   upsertPermission(p: SharePermission): Promise<void>;
+  listAllPermissions(): Promise<SharePermission[]>;
 
   // Approvals
   listApprovalsForDocument(documentId: string): Promise<ApprovalRequest[]>;
@@ -107,10 +111,12 @@ export interface DataStore {
   getApproval(id: string): Promise<ApprovalRequest | null>;
   createApproval(a: ApprovalRequest): Promise<void>;
   updateApproval(id: string, patch: Partial<ApprovalRequest>): Promise<ApprovalRequest | null>;
+  listAllApprovals(): Promise<ApprovalRequest[]>;
 
   // Comments (returned oldest-first)
   listCommentsForDocument(documentId: string): Promise<Comment[]>;
   createComment(c: Comment): Promise<void>;
+  listAllComments(): Promise<Comment[]>;
 
   // Activity logs (returned newest-first)
   listLogs(limit?: number): Promise<ActivityLog[]>;
@@ -123,6 +129,13 @@ export interface DataStore {
   listActiveLinksForDocument(documentId: string): Promise<ExternalShareLink[]>;
   createLink(l: ExternalShareLink): Promise<void>;
   updateLink(id: string, patch: Partial<ExternalShareLink>): Promise<void>;
+  listAllLinks(): Promise<ExternalShareLink[]>;
+
+  // External backup runs (e.g. to iDrive e2)
+  listBackupRuns(limit?: number): Promise<BackupRun[]>;
+  getLastSuccessfulBackupRun(): Promise<BackupRun | null>;
+  createBackupRun(b: BackupRun): Promise<void>;
+  updateBackupRun(id: string, patch: Partial<BackupRun>): Promise<void>;
 }
 
 // ----------------------------------------------------

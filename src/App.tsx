@@ -52,7 +52,8 @@ import {
   Menu,
   UserPlus,
   PenTool,
-  ShieldCheck
+  ShieldCheck,
+  CloudUpload
 } from 'lucide-react';
 import { 
   User, 
@@ -65,7 +66,8 @@ import {
   Comment,
   ExternalShareLink,
   DashboardStats,
-  Institution
+  Institution,
+  BackupRun
 } from './types';
 import Sidebar from './components/Sidebar';
 import { LoginScreen, ResetPasswordScreen, ChangePasswordModal } from './components/Auth';
@@ -3583,11 +3585,12 @@ function SettingsView({
   orgProfile: Institution | null;
   onSaved: (inst: Institution) => void;
 }) {
-  const [activeTab, setActiveTab] = useState<'overview' | 'institution'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'institution' | 'backup'>('overview');
 
   const tabs = [
     { id: 'overview' as const, label: 'Overview', icon: Database },
-    { id: 'institution' as const, label: 'Institution Profile', icon: Building2 }
+    { id: 'institution' as const, label: 'Institution Profile', icon: Building2 },
+    ...(currentUser.role === 'Admin' ? [{ id: 'backup' as const, label: 'Backup', icon: CloudUpload }] : [])
   ];
 
   return (
@@ -3648,7 +3651,121 @@ function SettingsView({
               <InstitutionProfileView currentUser={currentUser} onSaved={onSaved} />
             </div>
           )}
+
+          {activeTab === 'backup' && currentUser.role === 'Admin' && (
+            <div role="tabpanel">
+              <BackupSettingsView />
+            </div>
+          )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Admin-only: trigger and monitor external backups to an S3-compatible
+// target (iDrive e2 by default -- see server/backup.ts).
+function BackupSettingsView() {
+  const [status, setStatus] = useState<{ configured: boolean; runs: BackupRun[] } | null>(null);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState('');
+
+  const fetchStatus = () => {
+    fetch('/api/backup/status')
+      .then(res => res.json())
+      .then(data => { if (!data.error) setStatus(data); });
+  };
+
+  useEffect(() => { fetchStatus(); }, []);
+
+  const handleRunBackup = () => {
+    setRunning(true);
+    setError('');
+    fetch('/api/backup/run', { method: 'POST' })
+      .then(res => res.json())
+      .then(data => {
+        if (data.error) setError(data.error);
+        else if (data.status === 'error') setError(data.error || 'Backup failed.');
+        fetchStatus();
+      })
+      .catch(() => setError('Could not reach the server to run the backup.'))
+      .finally(() => setRunning(false));
+  };
+
+  const formatBytes = (bytes: number) =>
+    bytes > 1073741824 ? `${(bytes / 1073741824).toFixed(2)} GB`
+      : bytes > 1048576 ? `${(bytes / 1048576).toFixed(1)} MB`
+      : bytes > 1024 ? `${(bytes / 1024).toFixed(0)} KB` : `${bytes} B`;
+
+  if (!status) {
+    return <div className="text-xs text-slate-400 py-6 text-center">Loading backup status…</div>;
+  }
+
+  const lastSuccess = status.runs.find(r => r.status === 'success');
+
+  return (
+    <div className="space-y-4">
+      {!status.configured && (
+        <div className="bg-amber-50 border border-amber-100 text-amber-700 rounded-xl px-4 py-3 text-xs font-semibold flex items-start space-x-2">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>
+            No backup target configured. Set <code className="font-mono">IDRIVE_ACCESS_KEY_ID</code>, <code className="font-mono">IDRIVE_SECRET_ACCESS_KEY</code>, <code className="font-mono">IDRIVE_ENDPOINT</code>, and <code className="font-mono">IDRIVE_BUCKET</code> to enable backups to iDrive e2 or any S3-compatible storage.
+          </span>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+          <p className="text-[10px] font-mono font-bold text-slate-400 uppercase mb-1">Last Successful Backup</p>
+          <h3 className="font-display font-bold text-slate-800 text-sm">
+            {lastSuccess ? new Date(lastSuccess.completedAt || lastSuccess.startedAt).toLocaleString() : 'Never'}
+          </h3>
+        </div>
+        <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+          <p className="text-[10px] font-mono font-bold text-slate-400 uppercase mb-1">Files In Last Run</p>
+          <h3 className="font-display font-bold text-slate-800 text-sm">{lastSuccess?.filesUploaded ?? 0}</h3>
+        </div>
+        <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+          <p className="text-[10px] font-mono font-bold text-slate-400 uppercase mb-1">Data In Last Run</p>
+          <h3 className="font-display font-bold text-slate-800 text-sm">{lastSuccess ? formatBytes(lastSuccess.bytesUploaded) : '—'}</h3>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-slate-500">
+          Backs up new/changed files and a full metadata snapshot. Runs nightly automatically, or trigger one now.
+        </p>
+        <button
+          onClick={handleRunBackup}
+          disabled={running || !status.configured}
+          className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 shrink-0"
+        >
+          {running ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <CloudUpload className="w-3.5 h-3.5" />}
+          <span>{running ? 'Backing up…' : 'Back Up Now'}</span>
+        </button>
+      </div>
+
+      {error && <div className="bg-rose-50 border border-rose-100 text-rose-600 text-[11px] font-semibold rounded-xl p-2.5">{error}</div>}
+
+      <div className="bg-slate-50/80 rounded-xl p-3 divide-y divide-slate-150/40 text-[11px] max-h-72 overflow-y-auto">
+        {status.runs.length === 0 && <p className="text-slate-400 text-[10px] py-1">No backup runs yet.</p>}
+        {status.runs.map(run => (
+          <div key={run.id} className="flex items-start justify-between py-2 first:pt-0 last:pb-0">
+            <div>
+              <p className="font-bold text-slate-700 flex items-center space-x-1.5">
+                <span className={`w-1.5 h-1.5 rounded-full ${run.status === 'success' ? 'bg-emerald-500' : run.status === 'error' ? 'bg-rose-500' : 'bg-amber-500 animate-pulse'}`} />
+                <span>{run.status === 'success' ? 'Success' : run.status === 'error' ? 'Failed' : 'Running'}</span>
+                <span className="text-slate-400 font-medium">· {run.trigger === 'manual' ? `by ${run.triggeredByName || 'Admin'}` : 'scheduled'}</span>
+              </p>
+              {run.error && <p className="text-rose-500 mt-0.5">{run.error}</p>}
+              <p className="text-[9px] text-slate-400 mt-0.5">{new Date(run.startedAt).toLocaleString()}</p>
+            </div>
+            <div className="text-right text-[10px] text-slate-500 shrink-0">
+              <p>{run.filesUploaded} file{run.filesUploaded === 1 ? '' : 's'}</p>
+              <p>{formatBytes(run.bytesUploaded)}</p>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

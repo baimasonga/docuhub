@@ -10,7 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import {
   User, Folder, Document, DocumentVersion, SharePermission,
-  ApprovalRequest, ActivityLog, Comment, ExternalShareLink, Institution
+  ApprovalRequest, ActivityLog, Comment, ExternalShareLink, Institution, BackupRun
 } from '../src/types';
 import {
   DataStore, DocumentFilter, StoredUser,
@@ -28,6 +28,7 @@ interface Collections {
   comments: Comment[];
   logs: ActivityLog[];
   externalLinks: ExternalShareLink[];
+  backupRuns: BackupRun[];
 }
 
 const byNewest = (a: { createdAt: string }, b: { createdAt: string }) =>
@@ -39,7 +40,8 @@ export class MemoryStore implements DataStore {
   readonly kind = 'memory' as const;
   private db: Collections = {
     users: [], institutions: [], folders: [], documents: [], versions: [],
-    permissions: [], approvals: [], comments: [], logs: [], externalLinks: []
+    permissions: [], approvals: [], comments: [], logs: [], externalLinks: [],
+    backupRuns: []
   };
 
   /** filePath === null disables file persistence (Workers, tests). */
@@ -175,6 +177,10 @@ export class MemoryStore implements DataStore {
   async listVersionsPendingOffload() {
     return this.db.versions.filter(v => v.fileData && !v.storagePath).map(v => ({ ...v }));
   }
+  async listVersionsCreatedSince(sinceIso: string) {
+    const since = new Date(sinceIso).getTime();
+    return this.db.versions.filter(v => new Date(v.createdAt).getTime() >= since).map(v => ({ ...v }));
+  }
 
   // ---- Permissions ----
   async listPermissionsForDocument(documentId: string) {
@@ -195,6 +201,7 @@ export class MemoryStore implements DataStore {
     }
     this.flush();
   }
+  async listAllPermissions() { return this.db.permissions.map(p => ({ ...p })); }
 
   // ---- Approvals ----
   async listApprovalsForDocument(documentId: string) {
@@ -217,12 +224,14 @@ export class MemoryStore implements DataStore {
     this.flush();
     return { ...a };
   }
+  async listAllApprovals() { return this.db.approvals.map(a => ({ ...a })); }
 
   // ---- Comments ----
   async listCommentsForDocument(documentId: string) {
     return this.db.comments.filter(c => c.documentId === documentId).sort(byOldest).map(c => ({ ...c }));
   }
   async createComment(c: Comment) { this.db.comments.push(c); this.flush(); }
+  async listAllComments() { return this.db.comments.map(c => ({ ...c })); }
 
   // ---- Logs ----
   async listLogs(limit = 500) {
@@ -250,6 +259,25 @@ export class MemoryStore implements DataStore {
     const l = this.db.externalLinks.find(x => x.id === id);
     if (!l) return;
     Object.assign(l, patch);
+    this.flush();
+  }
+  async listAllLinks() { return this.db.externalLinks.map(l => ({ ...l })); }
+
+  // ---- Backup runs ----
+  async listBackupRuns(limit = 20) {
+    const byNewestStart = (a: BackupRun, b: BackupRun) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime();
+    return [...this.db.backupRuns].sort(byNewestStart).slice(0, limit);
+  }
+  async getLastSuccessfulBackupRun() {
+    const byNewestStart = (a: BackupRun, b: BackupRun) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime();
+    const runs = this.db.backupRuns.filter(b => b.status === 'success').sort(byNewestStart);
+    return runs[0] ? { ...runs[0] } : null;
+  }
+  async createBackupRun(b: BackupRun) { this.db.backupRuns.unshift(b); this.flush(); }
+  async updateBackupRun(id: string, patch: Partial<BackupRun>) {
+    const b = this.db.backupRuns.find(x => x.id === id);
+    if (!b) return;
+    Object.assign(b, patch);
     this.flush();
   }
 }

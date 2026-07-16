@@ -45,6 +45,7 @@ import {
 import {
   OAuthProvider, isProviderConfigured, buildAuthorizeUrl, exchangeCodeForProfile
 } from './server/oauth';
+import { runBackup, backupTargetFromEnv } from './server/backup';
 
 dotenv.config();
 
@@ -214,6 +215,21 @@ async function downloadStoredFile(objectPath: string): Promise<Buffer | null> {
     return null;
   }
   return Buffer.from(await data.arrayBuffer());
+}
+
+// Raw bytes for a version regardless of where they live -- inline in
+// Postgres (small/legacy files) or offloaded to Supabase Storage. Used by
+// the external backup job, which needs the actual bytes to re-upload
+// elsewhere (unlike normal serving, which redirects to a signed URL for
+// offloaded files instead of touching the bytes at all).
+async function getVersionBytesForBackup(version: DocumentVersion): Promise<{ buffer: Buffer; mime: string } | null> {
+  if (version.storagePath) {
+    const buffer = await downloadStoredFile(version.storagePath);
+    return buffer ? { buffer, mime: mimeForType(version.fileType) } : null;
+  }
+  const full = await db().getVersion(version.id);
+  if (!full?.fileData) return null;
+  return { buffer: storedFileToBuffer(full.fileData), mime: mimeForType(full.fileType) };
 }
 
 // Move a version's inline bytes into Storage; clears file_data on success.
@@ -2013,6 +2029,65 @@ app.get('/api/activity', h(async (req, res) => {
   }
   res.json(await db().listLogs());
 }));
+
+// ----------------------------------------------------
+// EXTERNAL BACKUP (e.g. iDrive e2 or any S3-compatible target)
+// ----------------------------------------------------
+app.get('/api/backup/status', h(async (req, res) => {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+  const [runs, configured] = await Promise.all([
+    db().listBackupRuns(20),
+    Promise.resolve(Boolean(backupTargetFromEnv(process.env)))
+  ]);
+  res.json({ configured, runs });
+}));
+
+app.post('/api/backup/run', h(async (req, res) => {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+
+  const target = backupTargetFromEnv(process.env);
+  if (!target) {
+    return res.status(400).json({
+      error: 'Backup target is not configured. Set IDRIVE_ACCESS_KEY_ID, IDRIVE_SECRET_ACCESS_KEY, IDRIVE_ENDPOINT, and IDRIVE_BUCKET.'
+    });
+  }
+
+  const run = await runBackup({
+    db: db(),
+    getVersionBytes: getVersionBytesForBackup,
+    target,
+    trigger: 'manual',
+    triggeredByName: admin.fullName,
+    newId
+  });
+  await logActivity(admin, 'Run Backup', undefined, undefined,
+    run.status === 'success'
+      ? `Backed up ${run.filesUploaded} file(s), ${(run.bytesUploaded / 1024 / 1024).toFixed(1)} MB.`
+      : `Backup failed: ${run.error}`);
+
+  res.status(run.status === 'success' ? 200 : 500).json(run);
+}));
+
+// Called by worker/index.ts's scheduled() handler (Cron Trigger). Not an
+// HTTP route -- no request/response, just the shared backup logic.
+export async function runScheduledBackup(): Promise<void> {
+  await ensureRuntimeReady();
+  const target = backupTargetFromEnv(process.env);
+  if (!target) {
+    console.log('[backup] scheduled run skipped -- IDRIVE_* env vars not configured.');
+    return;
+  }
+  const run = await runBackup({
+    db: db(),
+    getVersionBytes: getVersionBytesForBackup,
+    target,
+    trigger: 'scheduled',
+    newId
+  });
+  console.log(`[backup] scheduled run ${run.status}: ${run.filesUploaded} file(s), ${run.bytesUploaded} bytes.${run.error ? ` Error: ${run.error}` : ''}`);
+}
 
 app.get('/api/documents/:id/activity', h(async (req, res) => {
   const user = await requireUser(req, res);

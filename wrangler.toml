@@ -21,6 +21,12 @@ not_found_handling = "single-page-application"
 # so isApiPath() always gets to make the /api/* vs static-asset decision.
 run_worker_first = true
 
+# Nightly external backup (see worker/index.ts's scheduled() handler and
+# server/backup.ts). No-ops with a log line if IDRIVE_* secrets below aren't
+# set -- safe to leave enabled even before the feature is configured.
+[triggers]
+crons = ["0 2 * * *"]
+
 [vars]
 NODE_ENV = "production"
 # The project URL is public information (it's visible to every client);
@@ -45,3 +51,7 @@ ALLOWED_EMAIL_DOMAIN = "avdp.org.sl"
 #   SESSION_SECRET               Optional — overrides the cookie HMAC secret
 #   RESEND_API_KEY               Optional — enables email notifications
 #   GEMINI_API_KEY               Optional — AI OCR/tagging (falls back to heuristics)
+#   IDRIVE_ACCESS_KEY_ID         Optional — enables external backups (Settings → Backup, + nightly cron)
+#   IDRIVE_SECRET_ACCESS_KEY     Optional — pairs with the access key above
+#   IDRIVE_ENDPOINT              Optional — e.g. https://<id>.idrivee2-<region>.com (S3-compatible; also works with Backblaze/Wasabi/R2/MinIO)
+#   IDRIVE_BUCKET                Optional — destination bucket name

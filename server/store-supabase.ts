@@ -14,7 +14,7 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import {
   User, Folder, Document, DocumentVersion, SharePermission,
-  ApprovalRequest, ActivityLog, Comment, ExternalShareLink, Institution
+  ApprovalRequest, ActivityLog, Comment, ExternalShareLink, Institution, BackupRun
 } from '../src/types';
 import {
   DataStore, DocumentFilter, StoredUser,
@@ -180,6 +180,18 @@ const linkToRow = (l: Partial<ExternalShareLink>): Row => {
   if ('maxDownloads' in l) row.max_downloads = l.maxDownloads;
   return row;
 };
+
+const backupRunFromRow = (r: Row): BackupRun => ({
+  id: r.id, trigger: r.trigger, triggeredByName: r.triggered_by_name ?? undefined,
+  status: r.status, startedAt: r.started_at, completedAt: r.completed_at ?? undefined,
+  filesUploaded: r.files_uploaded || 0, bytesUploaded: Number(r.bytes_uploaded) || 0,
+  error: r.error ?? undefined
+});
+const backupRunToRow = (b: Partial<BackupRun>): Row => omitUndefined({
+  id: b.id, trigger: b.trigger, triggered_by_name: b.triggeredByName, status: b.status,
+  started_at: b.startedAt, completed_at: b.completedAt,
+  files_uploaded: b.filesUploaded, bytes_uploaded: b.bytesUploaded, error: b.error
+});
 
 function omitUndefined(row: Row): Row {
   const out: Row = {};
@@ -429,6 +441,12 @@ export class SupabaseStore implements DataStore {
         .not('file_data', 'is', null).is('storage_path', null).limit(100), 'listVersionsPendingOffload');
     return (data as Row[]).map(versionFromRow);
   }
+  async listVersionsCreatedSince(sinceIso: string) {
+    const data = SupabaseStore.unwrap(
+      await this.from('document_versions').select(VERSION_META_COLUMNS)
+        .gte('created_at', sinceIso).order('created_at', { ascending: true }), 'listVersionsCreatedSince');
+    return (data as Row[]).map(versionFromRow);
+  }
 
   // ---- Permissions ----
   async listPermissionsForDocument(documentId: string) {
@@ -445,6 +463,10 @@ export class SupabaseStore implements DataStore {
     SupabaseStore.unwrap(
       await this.from('share_permissions').upsert(permissionToRow(p), { onConflict: 'document_id,shared_with_user_id' }).select('id'),
       'upsertPermission');
+  }
+  async listAllPermissions() {
+    const data = SupabaseStore.unwrap(await this.from('share_permissions').select('*'), 'listAllPermissions');
+    return (data as Row[]).map(permissionFromRow);
   }
 
   // ---- Approvals ----
@@ -474,6 +496,10 @@ export class SupabaseStore implements DataStore {
       await this.from('approval_requests').update(approvalToRow(patch)).eq('id', id).select().maybeSingle(), 'updateApproval');
     return data ? approvalFromRow(data as Row) : null;
   }
+  async listAllApprovals() {
+    const data = SupabaseStore.unwrap(await this.from('approval_requests').select('*'), 'listAllApprovals');
+    return (data as Row[]).map(approvalFromRow);
+  }
 
   // ---- Comments ----
   async listCommentsForDocument(documentId: string) {
@@ -484,6 +510,10 @@ export class SupabaseStore implements DataStore {
   }
   async createComment(c: Comment) {
     SupabaseStore.unwrap(await this.from('doc_comments').insert(commentToRow(c)).select('id').single(), 'createComment');
+  }
+  async listAllComments() {
+    const data = SupabaseStore.unwrap(await this.from('doc_comments').select('*'), 'listAllComments');
+    return (data as Row[]).map(commentFromRow);
   }
 
   // ---- Logs ----
@@ -526,5 +556,30 @@ export class SupabaseStore implements DataStore {
   async updateLink(id: string, patch: Partial<ExternalShareLink>) {
     SupabaseStore.unwrap(
       await this.from('external_share_links').update(linkToRow(patch)).eq('id', id).select('id'), 'updateLink');
+  }
+  async listAllLinks() {
+    const data = SupabaseStore.unwrap(await this.from('external_share_links').select('*'), 'listAllLinks');
+    return (data as Row[]).map(linkFromRow);
+  }
+
+  // ---- Backup runs ----
+  async listBackupRuns(limit = 20) {
+    const data = SupabaseStore.unwrap(
+      await this.from('backup_runs').select('*')
+        .order('started_at', { ascending: false }).limit(limit), 'listBackupRuns');
+    return (data as Row[]).map(backupRunFromRow);
+  }
+  async getLastSuccessfulBackupRun() {
+    const data = SupabaseStore.unwrap(
+      await this.from('backup_runs').select('*').eq('status', 'success')
+        .order('started_at', { ascending: false }).limit(1).maybeSingle(), 'getLastSuccessfulBackupRun');
+    return data ? backupRunFromRow(data as Row) : null;
+  }
+  async createBackupRun(b: BackupRun) {
+    SupabaseStore.unwrap(await this.from('backup_runs').insert(backupRunToRow(b)).select('id').single(), 'createBackupRun');
+  }
+  async updateBackupRun(id: string, patch: Partial<BackupRun>) {
+    SupabaseStore.unwrap(
+      await this.from('backup_runs').update(backupRunToRow(patch)).eq('id', id).select('id'), 'updateBackupRun');
   }
 }
