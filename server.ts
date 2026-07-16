@@ -2089,6 +2089,30 @@ export async function runScheduledBackup(): Promise<void> {
   console.log(`[backup] scheduled run ${run.status}: ${run.filesUploaded} file(s), ${run.bytesUploaded} bytes.${run.error ? ` Error: ${run.error}` : ''}`);
 }
 
+// Node-only equivalent of the Cloudflare Cron Trigger (wrangler.toml
+// [triggers]), which has nothing to hook into outside Workers. Railway (and
+// any other plain-node host) keeps this process running continuously, so a
+// simple interval works: check every 30 minutes, fire once during the
+// 02:00-02:29 UTC window per day -- the same "0 2 * * *" schedule the
+// Workers cron uses. Whether it already ran today is read from the database
+// (not in-memory), so this is safe across process restarts: no double-fires,
+// and a missed window just waits for the next day rather than piling up.
+function startNightlyBackupScheduler() {
+  const CHECK_INTERVAL_MS = 30 * 60 * 1000;
+  setInterval(async () => {
+    try {
+      if (new Date().getUTCHours() !== 2) return;
+      const last = await db().getLastSuccessfulBackupRun();
+      const today = new Date().toISOString().slice(0, 10);
+      if (last && last.startedAt.slice(0, 10) === today) return; // already ran today
+      console.log('[backup] nightly scheduler firing.');
+      await runScheduledBackup();
+    } catch (err) {
+      console.error('[backup] nightly scheduler tick failed:', err);
+    }
+  }, CHECK_INTERVAL_MS);
+}
+
 app.get('/api/documents/:id/activity', h(async (req, res) => {
   const user = await requireUser(req, res);
   if (!user) return;
@@ -2445,6 +2469,7 @@ export { app };
 // assets come from the ASSETS binding.
 async function startServer() {
   await ensureRuntimeReady();
+  startNightlyBackupScheduler();
 
   if (process.env.NODE_ENV !== 'production') {
     // Vite is a dev-only dependency for the API server; load it lazily so a
