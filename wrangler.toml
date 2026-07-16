@@ -7,11 +7,9 @@ compatibility_flags = ["nodejs_compat"]
 pattern = "avdpdocs.org"
 custom_domain = true
 
-# Static SPA assets built by `npm run build` (vite -> dist-pages).
 [assets]
-directory = "./dist-pages"
+directory = "./public"  # or wherever your static files are
 binding = "ASSETS"
-not_found_handling = "single-page-application"
 # Without this, Cloudflare checks the Assets binding BEFORE running the
 # Worker's own fetch() handler for any request that looks like a page
 # navigation (Sec-Fetch-Dest: document/iframe/frame) -- e.g. the <iframe
