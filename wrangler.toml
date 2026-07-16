@@ -2,6 +2,10 @@ name = "docuhub"
 main = "worker/index.ts"
 compatibility_date = "2026-06-16"
 compatibility_flags = ["nodejs_compat"]
+# This is the critical part for custom domains:
+[[routes]]
+pattern = "avdpdocs.org"
+custom_domain = true
 
 # Static SPA assets built by `npm run build` (vite -> dist-pages).
 [assets]
