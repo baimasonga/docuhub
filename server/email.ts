@@ -156,3 +156,25 @@ export function documentSharedEmail(opts: {
       ${button(opts.baseUrl, 'Open in AVDP Document Management System')}`)
   };
 }
+
+// For external (non-account) recipients of a secure share link -- unlike
+// documentSharedEmail above, this goes to an email address the sharer typed
+// in directly, not an existing user record, so there's no recipient name and
+// no login involved. Never includes the password itself even when the link
+// is password-protected: that has to travel through a separate channel
+// (verbally, a different message) or the protection is pointless.
+export function externalLinkSharedEmail(opts: {
+  sharerName: string; documentTitle: string; message?: string; linkUrl: string;
+  requiresPassword: boolean; allowDownload: boolean; expiresAt: string;
+}) {
+  return {
+    subject: `${opts.sharerName} shared "${opts.documentTitle}" with you`,
+    html: layout('A document was shared with you', `
+      <p>Hi,</p>
+      <p><strong>${escapeHtml(opts.sharerName)}</strong> shared <strong>"${escapeHtml(opts.documentTitle)}"</strong> with you via AVDP Document Management System.</p>
+      ${opts.message ? `<p style="border-left:3px solid #e2e8f0;padding-left:12px;color:#64748b">${escapeHtml(opts.message)}</p>` : ''}
+      ${button(opts.linkUrl, opts.allowDownload ? 'View & Download' : 'View Document')}
+      ${opts.requiresPassword ? `<p style="color:#b45309;font-size:12px">This link is password-protected. Ask ${escapeHtml(opts.sharerName)} for the password separately.</p>` : ''}
+      <p style="font-size:12px;color:#94a3b8">This link expires ${new Date(opts.expiresAt).getFullYear() > 2900 ? 'never' : new Date(opts.expiresAt).toLocaleDateString()}.</p>`)
+  };
+}

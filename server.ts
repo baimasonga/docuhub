@@ -40,7 +40,7 @@ import {
 } from './server/auth';
 import {
   sendEmail, inviteEmail, passwordResetEmail, tempPasswordEmail,
-  approvalRequestedEmail, approvalDecidedEmail, documentSharedEmail
+  approvalRequestedEmail, approvalDecidedEmail, documentSharedEmail, externalLinkSharedEmail
 } from './server/email';
 import {
   OAuthProvider, isProviderConfigured, buildAuthorizeUrl, exchangeCodeForProfile
@@ -1927,7 +1927,7 @@ app.post('/api/documents/:id/external-link', h(async (req, res) => {
     return res.status(403).json({ error: 'You do not have permission to create a share link for this document.' });
   }
 
-  const { message, allowDownload, requiresPassword, password, maxDownloads, expiresInDays, permissionType } = req.body || {};
+  const { message, allowDownload, requiresPassword, password, maxDownloads, expiresInDays, permissionType, recipientEmails } = req.body || {};
 
   let expiresAt: string;
   if (expiresInDays === null) {
@@ -1969,7 +1969,31 @@ app.post('/api/documents/:id/external-link', h(async (req, res) => {
 
   await db().createLink(extLink);
   await logActivity(user, 'Create Secure Link', docId, doc.title, `Generated a ${passwordHash ? 'password-protected ' : ''}share link (/s/${extLink.shortCode}).`);
-  res.json({ success: true, link: publicLink(extLink) });
+
+  // Optional: email the link directly to one or more external addresses,
+  // instead of only handing the sharer a link to copy/paste themselves.
+  let emailsSent: string[] = [];
+  const recipients: string[] = Array.isArray(recipientEmails)
+    ? recipientEmails
+    : typeof recipientEmails === 'string' ? recipientEmails.split(',') : [];
+  const validRecipients = recipients
+    .map(e => String(e).trim())
+    .filter(e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+  if (validRecipients.length > 0) {
+    const linkUrl = `${requestBaseUrl(req)}/s/${extLink.shortCode}`;
+    const mail = externalLinkSharedEmail({
+      sharerName: user.fullName, documentTitle: doc.title, message: message || undefined,
+      linkUrl, requiresPassword: Boolean(passwordHash), allowDownload: extLink.allowDownload, expiresAt
+    });
+    for (const to of validRecipients) {
+      if (await sendEmail({ to, ...mail })) emailsSent.push(to);
+    }
+    if (emailsSent.length > 0) {
+      await logActivity(user, 'Email Secure Link', docId, doc.title, `Emailed the share link to ${emailsSent.join(', ')}.`);
+    }
+  }
+
+  res.json({ success: true, link: publicLink(extLink), emailsSent });
 }));
 
 // Revoke external link

@@ -53,7 +53,8 @@ import {
   UserPlus,
   PenTool,
   ShieldCheck,
-  CloudUpload
+  CloudUpload,
+  Mail
 } from 'lucide-react';
 import { 
   User, 
@@ -289,7 +290,9 @@ export default function App() {
   const [linkMessage, setLinkMessage] = useState<string>('');
   const [linkAllowDownload, setLinkAllowDownload] = useState<boolean>(true);
   const [linkMaxDownloads, setLinkMaxDownloads] = useState<string>('');
+  const [linkRecipientEmails, setLinkRecipientEmails] = useState<string>('');
   const [createdLink, setCreatedLink] = useState<ExternalShareLink | null>(null);
+  const [linkEmailsSent, setLinkEmailsSent] = useState<string[]>([]);
   const [linkLoading, setLinkLoading] = useState(false);
 
   // Identity is carried by an HttpOnly session cookie. On mount, restore any
@@ -1040,7 +1043,9 @@ export default function App() {
     setLinkMessage('');
     setLinkAllowDownload(true);
     setLinkMaxDownloads('');
+    setLinkRecipientEmails('');
     setCreatedLink(null);
+    setLinkEmailsSent([]);
   };
 
   const handleCreateShareLink = () => {
@@ -1057,13 +1062,19 @@ export default function App() {
         permissionType: linkPermission,
         allowDownload: linkAllowDownload,
         maxDownloads: linkMaxDownloads.trim() ? Number(linkMaxDownloads) : null,
-        message: linkMessage.trim() || undefined
+        message: linkMessage.trim() || undefined,
+        recipientEmails: linkRecipientEmails.trim() || undefined
       })
     })
       .then(res => res.json())
       .then(data => {
         setLinkLoading(false);
-        if (data.success) { setCreatedLink(data.link); triggerToast('Share link ready.', 'success'); }
+        if (data.success) {
+          setCreatedLink(data.link);
+          setLinkEmailsSent(data.emailsSent || []);
+          if (data.emailsSent?.length > 0) triggerToast(`Share link emailed to ${data.emailsSent.join(', ')}.`, 'success');
+          else triggerToast('Share link ready.', 'success');
+        }
         else triggerToast(data.error || 'Could not create link.', 'error');
       })
       .catch(() => { setLinkLoading(false); triggerToast('Could not create link.', 'error'); });
@@ -3064,6 +3075,12 @@ export default function App() {
                   <textarea value={linkMessage} onChange={(e) => setLinkMessage(e.target.value)} placeholder="Add a note for the recipient…" className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none resize-none h-14" />
                 </div>
 
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase flex items-center space-x-1"><Mail className="w-3 h-3" /><span>Email this link to (optional)</span></label>
+                  <input type="text" value={linkRecipientEmails} onChange={(e) => setLinkRecipientEmails(e.target.value)} placeholder="name@example.com, name2@example.com" className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none" />
+                  <p className="text-[9px] text-slate-400">Leave blank to just copy the link yourself. Separate multiple addresses with commas.</p>
+                </div>
+
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Link expires</label>
@@ -3115,6 +3132,12 @@ export default function App() {
                   </div>
                 </div>
                 {createdLink.message && <p className="text-[11px] text-slate-500 italic">“{createdLink.message}”</p>}
+                {linkEmailsSent.length > 0 && (
+                  <p className="flex items-center space-x-1.5 text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg px-2.5 py-1.5">
+                    <Mail className="w-3 h-3 shrink-0" />
+                    <span>Emailed to {linkEmailsSent.join(', ')}</span>
+                  </p>
+                )}
                 <div className="flex flex-wrap gap-2 text-[10px] font-mono">
                   <span className="px-2 py-1 bg-slate-100 rounded-md text-slate-600">{createdLink.permissionType === 'Commenter' ? 'CAN COMMENT' : 'VIEW ONLY'}</span>
                   <span className="px-2 py-1 bg-slate-100 rounded-md text-slate-600">{createdLink.allowDownload === false ? 'NO DOWNLOAD' : 'DOWNLOADABLE'}</span>
