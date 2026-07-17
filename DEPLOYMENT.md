@@ -52,6 +52,7 @@ dashboard; Railway: service variables):
 | `INITIAL_ADMIN_PASSWORD` | recommended | First-boot password for the seeded admin. Defaults to `ChangeMe!2026` (a change is forced at first login) |
 | `RESEND_API_KEY` | optional | Enables email (invites, approvals, shares, password resets) via [Resend](https://resend.com). Without it, emails are logged and skipped |
 | `EMAIL_FROM` | optional | Sender, e.g. `DocuHub <docs@yourdomain.com>`. Defaults to Resend's shared onboarding sender |
+| `RESEND_SHARE_TEMPLATE_ID` | optional | When set, share and share-link emails only use this Resend dashboard template instead of the built-in HTML. Other emails are unaffected |
 | `APP_URL` | optional | Base URL used in email links, e.g. `https://docuhub.example.workers.dev`. Defaults to the request host |
 | `GEMINI_API_KEY` | optional | AI OCR/tagging; falls back to local heuristics |
 | `ALLOWED_EMAIL_DOMAIN` | set (in `wrangler.toml`) | Restrict user emails to one domain. Set to `avdp.org.sl` in `wrangler.toml` `[vars]` -- unset = any valid email |

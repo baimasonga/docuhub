@@ -39,7 +39,7 @@ import {
   loginRateLimited, clearLoginAttempts
 } from './server/auth';
 import {
-  sendEmail, inviteEmail, passwordResetEmail, tempPasswordEmail,
+  sendEmail, sendTemplatedEmail, inviteEmail, passwordResetEmail, tempPasswordEmail,
   approvalRequestedEmail, approvalDecidedEmail, documentSharedEmail, externalLinkSharedEmail
 } from './server/email';
 import {
@@ -427,6 +427,20 @@ function requestBaseUrl(req: express.Request): string {
   if (process.env.APP_URL) return process.env.APP_URL.replace(/\/$/, '');
   const proto = String(req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http')).split(',')[0];
   return `${proto}://${req.headers.host || 'localhost'}`;
+}
+
+// Share/share-link notifications use a Resend dashboard-authored template
+// when RESEND_SHARE_TEMPLATE_ID is set, falling back to the raw-HTML
+// mail (built by documentSharedEmail/externalLinkSharedEmail) otherwise --
+// same optional-integration pattern as RESEND_API_KEY, GEMINI_API_KEY, etc.
+// `variables` names are a best guess pending confirmation against the
+// actual template in the Resend dashboard.
+async function sendShareEmail(
+  to: string, mail: { subject: string; html: string }, variables: Record<string, unknown>
+): Promise<boolean> {
+  const templateId = process.env.RESEND_SHARE_TEMPLATE_ID;
+  if (templateId) return sendTemplatedEmail({ to, templateId, variables });
+  return sendEmail({ to, ...mail });
 }
 
 function newId(prefix: string): string {
@@ -1911,7 +1925,10 @@ app.post('/api/documents/:id/share', h(async (req, res) => {
     recipientName: targetUser.fullName, sharerName: user.fullName,
     documentTitle: doc.title, permissionType, baseUrl: requestBaseUrl(req)
   });
-  await sendEmail({ to: targetUser.email, ...mail });
+  await sendShareEmail(targetUser.email, mail, {
+    recipientName: targetUser.fullName, sharerName: user.fullName,
+    documentTitle: doc.title, permissionType, link: requestBaseUrl(req)
+  });
   res.json({ success: true });
 }));
 
@@ -1985,8 +2002,13 @@ app.post('/api/documents/:id/external-link', h(async (req, res) => {
       sharerName: user.fullName, documentTitle: doc.title, message: message || undefined,
       linkUrl, requiresPassword: Boolean(passwordHash), allowDownload: extLink.allowDownload, expiresAt
     });
+    const variables = {
+      sharerName: user.fullName, documentTitle: doc.title, message: message || '',
+      link: linkUrl, requiresPassword: Boolean(passwordHash), allowDownload: extLink.allowDownload,
+      expiresAt
+    };
     for (const to of validRecipients) {
-      if (await sendEmail({ to, ...mail })) emailsSent.push(to);
+      if (await sendShareEmail(to, mail, variables)) emailsSent.push(to);
     }
     if (emailsSent.length > 0) {
       await logActivity(user, 'Email Secure Link', docId, doc.title, `Emailed the share link to ${emailsSent.join(', ')}.`);

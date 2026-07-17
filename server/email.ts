@@ -46,6 +46,44 @@ export async function sendEmail(opts: { to: string; subject: string; html: strin
   }
 }
 
+// Send using a template authored in Resend's own dashboard (subject + HTML
+// live there, not in this codebase) instead of the html/subject built by the
+// functions below. Same REST endpoint as sendEmail -- Resend's `template`
+// field replaces `subject`/`html` in the request body; everything else
+// (auth, from, timeout, error handling) is identical.
+export async function sendTemplatedEmail(opts: {
+  to: string; templateId: string; variables: Record<string, unknown>;
+}): Promise<boolean> {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    console.log(`[email] (disabled — set RESEND_API_KEY) Would send template ${opts.templateId} to ${opts.to}`);
+    return false;
+  }
+  const from = process.env.EMAIL_FROM || 'AVDP Document Management System <onboarding@resend.dev>';
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from, to: [opts.to],
+        template: { id: opts.templateId, variables: opts.variables }
+      }),
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    if (!res.ok) {
+      console.error(`[email] templated send failed (${res.status}):`, (await res.text()).slice(0, 300));
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('[email] templated send error:', (err as Error).message);
+    return false;
+  }
+}
+
 // ---- Templates -------------------------------------------------------------
 
 // Every template below interpolates user-controlled strings (names, document

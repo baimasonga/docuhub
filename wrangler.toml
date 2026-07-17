@@ -57,6 +57,8 @@ ALLOWED_EMAIL_DOMAIN = "avdp.org.sl"
 #   INITIAL_ADMIN_PASSWORD       Optional — first-boot admin password (default ChangeMe!2026, change forced on first login)
 #   SESSION_SECRET               Optional — overrides the cookie HMAC secret
 #   RESEND_API_KEY               Optional — enables email notifications
+#   RESEND_SHARE_TEMPLATE_ID     Optional — Resend dashboard template ID used for share/
+#                                 share-link emails instead of this codebase's built-in HTML
 #   GEMINI_API_KEY               Optional — AI OCR/tagging (falls back to heuristics)
 #   IDRIVE_ACCESS_KEY_ID         Optional — enables external backups (Settings → Backup, + nightly cron)
 #   IDRIVE_SECRET_ACCESS_KEY     Optional — pairs with the access key above
