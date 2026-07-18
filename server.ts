@@ -1936,7 +1936,7 @@ app.post('/api/documents/:id/share', h(async (req, res) => {
     SECURITY_NOTICE: 'Only your AVDP account can open this document.',
     EXPIRY_DATE: 'No expiry — access remains until revoked',
     DOCUMENT_URL: requestBaseUrl(req),
-    CURRENT_YEAR: new Date().getFullYear()
+    CURRENT_YEAR: String(new Date().getFullYear())
   });
   res.json({ success: true });
 }));
@@ -2023,7 +2023,7 @@ app.post('/api/documents/:id/external-link', h(async (req, res) => {
         : 'Do not forward this link — it grants direct access to the document.',
       EXPIRY_DATE: expiryLabel,
       DOCUMENT_URL: linkUrl,
-      CURRENT_YEAR: new Date().getFullYear()
+      CURRENT_YEAR: String(new Date().getFullYear())
     };
     for (const to of validRecipients) {
       if (await sendShareEmail(to, mail, variables)) emailsSent.push(to);
