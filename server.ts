@@ -433,8 +433,10 @@ function requestBaseUrl(req: express.Request): string {
 // when RESEND_SHARE_TEMPLATE_ID is set, falling back to the raw-HTML
 // mail (built by documentSharedEmail/externalLinkSharedEmail) otherwise --
 // same optional-integration pattern as RESEND_API_KEY, GEMINI_API_KEY, etc.
-// `variables` names are a best guess pending confirmation against the
-// actual template in the Resend dashboard.
+// `variables` keys (RECIPIENT_NAME, SENDER_NAME, DOCUMENT_NAME, DOCUMENT_META,
+// PERSONAL_MESSAGE, SECURITY_NOTICE, EXPIRY_DATE, DOCUMENT_URL, CURRENT_YEAR)
+// match the placeholders in the "Document Shared" template in the Resend
+// dashboard -- keep them in sync if that template's variables change.
 async function sendShareEmail(
   to: string, mail: { subject: string; html: string }, variables: Record<string, unknown>
 ): Promise<boolean> {
@@ -1926,8 +1928,15 @@ app.post('/api/documents/:id/share', h(async (req, res) => {
     documentTitle: doc.title, permissionType, baseUrl: requestBaseUrl(req)
   });
   await sendShareEmail(targetUser.email, mail, {
-    recipientName: targetUser.fullName, sharerName: user.fullName,
-    documentTitle: doc.title, permissionType, link: requestBaseUrl(req)
+    RECIPIENT_NAME: targetUser.fullName,
+    SENDER_NAME: user.fullName,
+    DOCUMENT_NAME: doc.title,
+    DOCUMENT_META: `${permissionType} access`,
+    PERSONAL_MESSAGE: `You've been granted ${permissionType.toLowerCase()} access to this document.`,
+    SECURITY_NOTICE: 'Only your AVDP account can open this document.',
+    EXPIRY_DATE: 'No expiry — access remains until revoked',
+    DOCUMENT_URL: requestBaseUrl(req),
+    CURRENT_YEAR: new Date().getFullYear()
   });
   res.json({ success: true });
 }));
@@ -2002,10 +2011,19 @@ app.post('/api/documents/:id/external-link', h(async (req, res) => {
       sharerName: user.fullName, documentTitle: doc.title, message: message || undefined,
       linkUrl, requiresPassword: Boolean(passwordHash), allowDownload: extLink.allowDownload, expiresAt
     });
+    const expiryLabel = new Date(expiresAt).getFullYear() > 2900 ? 'Never' : new Date(expiresAt).toLocaleDateString();
     const variables = {
-      sharerName: user.fullName, documentTitle: doc.title, message: message || '',
-      link: linkUrl, requiresPassword: Boolean(passwordHash), allowDownload: extLink.allowDownload,
-      expiresAt
+      RECIPIENT_NAME: 'there',
+      SENDER_NAME: user.fullName,
+      DOCUMENT_NAME: doc.title,
+      DOCUMENT_META: `${extLink.allowDownload ? 'View & download' : 'View only'} access`,
+      PERSONAL_MESSAGE: message || `${user.fullName} shared this document with you.`,
+      SECURITY_NOTICE: passwordHash
+        ? 'This link is password-protected — ask the sender for the password separately.'
+        : 'Do not forward this link — it grants direct access to the document.',
+      EXPIRY_DATE: expiryLabel,
+      DOCUMENT_URL: linkUrl,
+      CURRENT_YEAR: new Date().getFullYear()
     };
     for (const to of validRecipients) {
       if (await sendShareEmail(to, mail, variables)) emailsSent.push(to);
