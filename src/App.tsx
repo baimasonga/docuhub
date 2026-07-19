@@ -2394,19 +2394,28 @@ export default function App() {
 
       {/* Primary Right Detail Sidebar Layout (Dynamic interactive view details, OCR snippets, comments, approvals) */}
       {selectedDocId && docDetail && (
-        <aside className="w-96 bg-white border-l border-slate-150 flex flex-col h-full shrink-0 shadow-lg relative z-20 overflow-hidden">
-          
+        <>
+          {/* Mobile backdrop: below md the panel becomes a full-screen overlay (see aside below)
+              instead of a fixed w-96 flex sibling, which the root layout's overflow-hidden was
+              clipping on narrow viewports -- pushing the Close button off screen with no way to
+              scroll to it. */}
+          <div
+            className="fixed inset-0 z-30 bg-slate-900/40 md:hidden"
+            onClick={() => { setSelectedDocId(null); setDocDetail(null); }}
+          />
+          <aside className="fixed inset-0 z-40 w-full md:static md:inset-auto md:z-20 md:w-96 md:shrink-0 bg-white border-slate-150 md:border-l flex flex-col h-full shadow-lg overflow-hidden">
+
           {/* Header detail */}
-          <div className="p-5 border-b border-slate-50 flex items-start justify-between bg-slate-50/50">
-            <div className="flex items-center space-x-2.5">
+          <div className="p-5 border-b border-slate-50 flex items-start justify-between bg-slate-50/50 shrink-0">
+            <div className="flex items-center space-x-2.5 min-w-0">
               <FileFormatBadge fileType={docDetail.document.fileType} docType={docDetail.document.documentType} fileName={docDetail.document.fileName} size="lg" />
               <div className="min-w-0">
                 <h3 className="text-xs font-bold text-slate-800 truncate max-w-[200px]">{docDetail.document.title}</h3>
                 <p className="text-[10px] text-slate-400 mt-0.5">UUID: {docDetail.document.id}</p>
               </div>
             </div>
-            
-            <div className="flex items-center space-x-1.5">
+
+            <div className="flex items-center space-x-1.5 shrink-0">
               <button
                 onClick={() => setPreviewDoc({ id: docDetail.document.id, title: docDetail.document.title, fileType: docDetail.document.fileType, fileName: docDetail.document.fileName })}
                 className="p-1 px-2.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 text-[9px] font-bold flex items-center space-x-1"
@@ -2419,10 +2428,10 @@ export default function App() {
                   setSelectedDocId(null);
                   setDocDetail(null);
                 }}
-                className="p-1 px-2.5 bg-slate-200/50 text-slate-500 rounded-lg hover:bg-slate-200 text-[9px] font-bold flex items-center space-x-1"
+                title="Close"
+                className="p-1.5 bg-white border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-100 hover:text-slate-700 shadow-sm"
               >
-                <X className="w-3.5 h-3.5" />
-                <span>Close</span>
+                <X className="w-4 h-4" />
               </button>
             </div>
           </div>
@@ -2793,7 +2802,8 @@ export default function App() {
             </div>
 
           </div>
-        </aside>
+          </aside>
+        </>
       )}
 
       {/* ----------------- MODALS DIALOGS BACKGROULDS ----------------- */}
