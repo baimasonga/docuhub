@@ -209,6 +209,7 @@ export default function App() {
     activity: ActivityLog[];
   } | null>(null);
   const [showFileHistory, setShowFileHistory] = useState(false);
+  const [showOcrText, setShowOcrText] = useState(false);
 
   // Modals visibility triggers
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -2473,19 +2474,27 @@ export default function App() {
               </div>
             </div>
 
-            {/* Smart Automated OCR index output display */}
+            {/* Extracted text: collapsed by default -- most users never need the raw
+                OCR output, it's just search-index plumbing surfaced for the rare case
+                someone wants to double check what was indexed. */}
             {docDetail.document.ocrText && (
               <div className="space-y-1.5">
-                <span className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase flex items-center">
-                  <Sparkles className="w-3 h-3 text-indigo-600 mr-1" />
-                  <span>AI-OCR Text Snippet Scan</span>
-                </span>
-                <div className="relative border border-amber-100/40 bg-amber-50/20 rounded-xl p-3 text-[10px] text-slate-600 font-mono leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto">
-                  <div className="absolute top-2 right-2 bg-indigo-50 text-indigo-700 font-bold px-1.5 py-0.2 rounded text-[7px] tracking-widest font-sans uppercase z-10">
-                    GEMINI ACTIVE
+                <button
+                  type="button"
+                  onClick={() => setShowOcrText(s => !s)}
+                  className="w-full flex justify-between items-center"
+                >
+                  <span className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase flex items-center">
+                    <Sparkles className="w-3 h-3 text-indigo-600 mr-1" />
+                    <span>Extracted Text</span>
+                  </span>
+                  <ChevronRight className={`w-3.5 h-3.5 text-slate-400 transition-transform shrink-0 ${showOcrText ? 'rotate-90' : ''}`} />
+                </button>
+                {showOcrText && (
+                  <div className="border border-slate-150 bg-slate-50 rounded-xl p-3 text-[10px] text-slate-600 font-mono leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto">
+                    {docDetail.document.ocrText}
                   </div>
-                  {docDetail.document.ocrText}
-                </div>
+                )}
               </div>
             )}
 
