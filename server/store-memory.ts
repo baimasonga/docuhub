@@ -174,6 +174,11 @@ export class MemoryStore implements DataStore {
     return v ? { ...v } : null;
   }
   async createVersion(v: DocumentVersion) {
+    if (this.db.versions.some(existing =>
+      existing.documentId === v.documentId && existing.versionNumber === v.versionNumber
+    )) {
+      throw new Error('Duplicate document version number.');
+    }
     if (v.storagePath && this.db.versions.some(existing => existing.storagePath === v.storagePath)) {
       throw new Error('A storage object cannot be attached to more than one document version.');
     }

@@ -377,6 +377,17 @@ async function canEditDocument(user: Pick<User, 'id' | 'role' | 'institutionId'>
   return user.role === 'Admin' || user.role === 'Manager' || editor;
 }
 
+async function canCommentDocument(user: Pick<User, 'id' | 'role' | 'institutionId'>, doc: Document): Promise<boolean> {
+  if (!user.institutionId || user.institutionId !== doc.institutionId) return false;
+  if (doc.ownerId === user.id) return true;
+  const perms = await db().listPermissionsForDocument(doc.id);
+  const mayComment = perms.some(p =>
+    p.sharedWithUserId === user.id && (p.permissionType === 'Commenter' || p.permissionType === 'Editor')
+  );
+  if (doc.confidentialityLevel === 'Confidential') return user.role === 'Admin' || mayComment;
+  return user.role === 'Admin' || user.role === 'Manager' || mayComment;
+}
+
 function canDeleteFolder(user: Pick<User, 'id' | 'role' | 'institutionId'>, folder: Folder): boolean {
   return user.institutionId === folder.institutionId && (user.role === 'Admin' || user.role === 'Manager' || folder.ownerId === user.id);
 }
@@ -1834,6 +1845,9 @@ app.post('/api/documents/:id/version', h(async (req, res) => {
     await logActivity(user, 'Upload Version', docId, doc.title, `Uploaded version ${nextVerStr} replacing former draft.`);
     res.json({ success: true, document: updatedDoc, version: newVersion });
   } catch (err: any) {
+    if (/duplicate document version|duplicate key value|document_versions_doc_version_key|document_versions_storage_path_key/i.test(String(err?.message || ''))) {
+      return res.status(409).json({ error: 'A concurrent version upload already used this version number or storage object. Refresh and try again.' });
+    }
     res.status(500).json({ error: 'Version update failed.', details: err.message });
   }
 }));
@@ -1944,7 +1958,9 @@ app.post('/api/documents/:id/classification', h(async (req, res) => {
   }
   const doc = await db().getDocument(req.params.id);
   if (!doc) return res.status(404).json({ error: 'Document not found.' });
-  if (doc.institutionId !== user.institutionId) return res.status(403).json({ error: 'Cross-institution access denied.' });
+  if (!(await canEditDocument(user, doc))) {
+    return res.status(403).json({ error: 'Editor access is required to change document classification.' });
+  }
   const level = req.body?.confidentialityLevel as Document['confidentialityLevel'];
   if (!['Normal File', 'Official Record', 'Confidential', 'Archive'].includes(level)) {
     return res.status(400).json({ error: 'Invalid document classification.' });
@@ -2312,8 +2328,8 @@ app.post('/api/comments', h(async (req, res) => {
 
   const doc = await db().getDocument(documentId);
   if (!doc) return res.status(404).json({ error: 'Target document was not found.' });
-  if (!(await canEditDocument(user, doc))) {
-    return res.status(403).json({ error: 'Editor access is required to make a persistent copy.' });
+  if (!(await canCommentDocument(user, doc))) {
+    return res.status(403).json({ error: 'Commenter access is required to comment on this document.' });
   }
 
   const newComment: Comment = {

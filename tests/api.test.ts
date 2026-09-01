@@ -89,6 +89,13 @@ test('production refuses to start without durable storage and required secrets',
   assert.equal(result.status, 23, `production unexpectedly started: ${result.stdout}\n${result.stderr}`);
 });
 
+test('security migration uses concurrency-safe unique indexes', () => {
+  const sql = fs.readFileSync(path.join(process.cwd(), 'supabase/migrations/0006_security_hardening.sql'), 'utf8');
+  assert.match(sql, /create unique index if not exists document_versions_doc_version_key/i);
+  assert.match(sql, /create unique index if not exists document_versions_storage_path_key/i);
+  assert.doesNotMatch(sql, /create trigger document_versions_no_duplicates/i);
+});
+
 test('protected endpoints reject unauthenticated requests', async () => {
   for (const p of ['/api/documents', '/api/users', '/api/stats', '/api/folders', '/api/activity']) {
     const res = await api(null, 'GET', p);
@@ -250,6 +257,40 @@ test('copies use independent stored content and require editor access', async ()
   assert.match(await original.text(), /Total amount due/);
 });
 
+test('Commenter shares can comment but Viewer shares cannot', async () => {
+  const denied = await api('staff', 'POST', '/api/comments', {
+    documentId: docId, text: 'Viewer should not be able to comment.'
+  });
+  assert.equal(denied.status, 403);
+
+  const share = await api('admin', 'POST', `/api/documents/${docId}/share`, {
+    targetUserId: staffId, permissionType: 'Commenter'
+  });
+  assert.equal(share.status, 200);
+  const allowed = await api('staff', 'POST', '/api/comments', {
+    documentId: docId, text: 'Commenter access works.'
+  });
+  assert.equal(allowed.status, 200);
+});
+
+test('concurrent version uploads never create duplicate version numbers', async () => {
+  const content = Buffer.from('INVOICE\nTotal amount due: $1,250\nConcurrent revision.').toString('base64');
+  const payload = {
+    fileName: 'vendor_invoice_revision.txt', fileType: 'text/plain',
+    fileSize: 56, fileData: content
+  };
+  const responses = await Promise.all([
+    api('admin', 'POST', `/api/documents/${docId}/version`, payload),
+    api('admin', 'POST', `/api/documents/${docId}/version`, payload)
+  ]);
+  const statuses = responses.map(r => r.status);
+  assert.ok(statuses.every(status => status === 200 || status === 409));
+  assert.ok(statuses.includes(200));
+  const detail = await (await api('admin', 'GET', `/api/documents/${docId}`)).json();
+  const labels = detail.versions.map((version: any) => version.versionNumber);
+  assert.equal(new Set(labels).size, labels.length, 'version labels must remain unique');
+});
+
 test('approval flow: request, decide, status cascades', async () => {
   const req = await api('admin', 'POST', `/api/documents/${docId}/request-approval`, {
     approverId: 'admin-1', comment: 'Please review'
@@ -328,6 +369,16 @@ test('security validation rejects active content and invalid permissions', async
 });
 
 test('confidential classification requires explicit access and revokes links', async () => {
+  const managerCreated = await api('admin', 'POST', '/api/users', {
+    fullName: 'Unshared Manager', email: 'manager@example.com', role: 'Manager', department: 'Finance'
+  });
+  assert.equal(managerCreated.status, 201);
+  const manager = await managerCreated.json();
+  await login('manager', manager.email, manager.tempPassword);
+  assert.equal((await api('manager', 'POST', '/api/auth/change-password', {
+    currentPassword: manager.tempPassword, newPassword: 'ManagerPermanent9'
+  })).status, 200);
+
   const created = await api('admin', 'POST', '/api/users', {
     fullName: 'Procurement Viewer', email: 'viewer@example.com', role: 'Viewer', department: 'Procurement'
   });
@@ -350,6 +401,10 @@ test('confidential classification requires explicit access and revokes links', a
     confidentialityLevel: 'Confidential'
   });
   assert.equal(classified.status, 200);
+  const managerDeclassify = await api('manager', 'POST', `/api/documents/${docId}/classification`, {
+    confidentialityLevel: 'Normal File'
+  });
+  assert.equal(managerDeclassify.status, 403, 'an unshared Manager must not declassify a confidential document');
   assert.equal((await api('viewer', 'GET', `/api/documents/${docId}`)).status, 403);
   assert.equal((await api(null, 'GET', `/s/${liveLink.shortCode}`)).status, 403, 'classification revokes external links');
   assert.equal((await api('viewer', 'POST', `/api/documents/${docId}/copy`, {})).status, 403);

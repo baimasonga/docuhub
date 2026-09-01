@@ -32,6 +32,9 @@ instances).
    `supabase db push` with the CLI). Migration `0006_security_hardening.sql`
    is required by the current application and adds tenant isolation, revocable
    sessions, per-user stars, durable rate limiting and atomic link counters.
+   Back up the database first. The migration deliberately stops if it detects
+   duplicate version labels or shared storage paths; repair those records and
+   copy shared objects to independent paths before retrying.
 3. Copy the **Project URL** and the **service_role key** from
    Project Settings → API.
 

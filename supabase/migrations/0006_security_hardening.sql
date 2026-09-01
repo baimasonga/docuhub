@@ -83,26 +83,31 @@ alter table external_share_links drop constraint if exists external_links_max_do
 alter table external_share_links add constraint external_links_max_downloads_check
   check (max_downloads is null or max_downloads > 0) not valid;
 
--- Reject new duplicate version labels or shared object paths while allowing an
--- administrator to inspect and repair any legacy duplicates before deployment.
-create or replace function prevent_duplicate_document_version()
-returns trigger language plpgsql as $$
+-- Unique indexes, unlike an existence-check trigger, remain correct when
+-- concurrent transactions try to claim the same version label or object.
+-- Stop with an actionable error if legacy data must be repaired first; never
+-- discard or relabel document history automatically.
+do $$
 begin
   if exists (
-    select 1 from document_versions v
-    where v.document_id = new.document_id and v.version_number = new.version_number
-      and v.id <> new.id
-  ) then raise exception 'duplicate document version number'; end if;
-  if new.storage_path is not null and exists (
-    select 1 from document_versions v
-    where v.storage_path = new.storage_path and v.id <> new.id
-  ) then raise exception 'storage object is already attached to another version'; end if;
-  return new;
+    select 1 from document_versions
+    group by document_id, version_number having count(*) > 1
+  ) then
+    raise exception 'Legacy duplicate document version numbers must be repaired before migration 0006';
+  end if;
+  if exists (
+    select 1 from document_versions where storage_path is not null
+    group by storage_path having count(*) > 1
+  ) then
+    raise exception 'Legacy shared storage paths must be copied to independent objects before migration 0006';
+  end if;
 end;
 $$;
 drop trigger if exists document_versions_no_duplicates on document_versions;
-create trigger document_versions_no_duplicates
-before insert or update of document_id, version_number, storage_path on document_versions
-for each row execute function prevent_duplicate_document_version();
+drop function if exists prevent_duplicate_document_version();
+create unique index if not exists document_versions_doc_version_key
+  on document_versions(document_id, version_number);
+create unique index if not exists document_versions_storage_path_key
+  on document_versions(storage_path) where storage_path is not null;
 
 commit;
