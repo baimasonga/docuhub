@@ -42,6 +42,7 @@ export interface Folder {
   name: string;
   parentFolderId: string | null; // null represents Root
   ownerId: string;
+  institutionId: string;
   department?: string; // department scope, e.g., 'Finance'
   createdAt: string;
 }
@@ -55,6 +56,7 @@ export interface Document {
   description: string;
   ownerId: string;
   ownerName: string;
+  institutionId: string;
   department?: string;
   folderId: string | null; // null is 'root'
   documentType: 'Contract' | 'Invoice' | 'Memo' | 'Report' | 'Support' | 'Other';

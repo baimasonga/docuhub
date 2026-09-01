@@ -17,23 +17,32 @@ function isApiPath(pathname: string): boolean {
   return pathname.startsWith('/api/') || pathname.startsWith('/s/');
 }
 
+function secure(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('Referrer-Policy', 'no-referrer');
+  headers.set('X-Frame-Options', 'SAMEORIGIN');
+  headers.set('Permissions-Policy', 'camera=(self), microphone=(), geolocation=()');
+  headers.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://*.supabase.co; frame-src 'self' https://*.supabase.co blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'");
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (isApiPath(url.pathname)) {
-      // Load the datastore lazily inside a request context: module scope on
-      // Workers can't do async I/O and doesn't see process.env. The Express
-      // server itself already listens (registered at module scope in
-      // server.ts). Never fail the request over init — the app falls back to
-      // its in-memory seed state, which every handler can serve.
       try {
         await ensureRuntimeReady();
       } catch (err) {
-        console.error('[worker] runtime init failed; serving with in-memory state.', err);
+        console.error('[worker] runtime init failed; refusing unsafe fallback.', err);
+        return new Response('Service temporarily unavailable.', {
+          status: 503,
+          headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' }
+        });
       }
-      return expressHandler.fetch(request, env as unknown as Record<string, unknown>, ctx);
+      return secure(await expressHandler.fetch(request, env as unknown as Record<string, unknown>, ctx));
     }
-    return env.ASSETS.fetch(request);
+    return secure(await env.ASSETS.fetch(request));
   },
 
   // Cron Trigger entry point (see wrangler.toml [triggers]). Runs the same

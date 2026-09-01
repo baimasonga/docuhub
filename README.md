@@ -1,20 +1,51 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# DocuHub
 
-# Run and deploy your AI Studio app
+DocuHub is the AVDP document-management system. It provides controlled document upload, versioning, OCR-assisted indexing, folders, approvals, audit history, internal sharing, expiring external links, and external backups.
 
-This contains everything you need to run your app locally.
+## Architecture
 
-View your app in AI Studio: https://ai.studio/apps/d95df5dd-fc6b-4a7f-8a63-00a8598b38c1
+- React 19 and Vite frontend
+- Express and TypeScript API
+- Supabase Postgres and private Supabase Storage in production
+- Cloudflare Workers deployment, with Railway/Node supported as an alternative
+- Optional Resend email, OAuth, Gemini-assisted OCR, and S3-compatible backup
 
-## Run Locally
+Production fails closed when its database or required secrets are unavailable. It never falls back to temporary in-memory data.
 
-**Prerequisites:**  Node.js
+## Local development
 
+```bash
+npm ci
+npm run dev
+```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+Local development uses `data/db.json` when Supabase is not configured. Copy `.env.example` to `.env` and set local values as needed.
+
+## Verification
+
+```bash
+npm run lint
+node --import tsx --test tests/api.test.ts
+npm run build
+npm audit --audit-level=high
+```
+
+GitHub Actions runs these checks for every pull request and every push to `main`.
+
+## Production setup
+
+Apply every SQL migration in `supabase/migrations/` in numeric order, then configure the required environment variables described in [DEPLOYMENT.md](DEPLOYMENT.md). Never commit service-role keys, session secrets, initial passwords, email credentials, OAuth secrets, AI keys, or backup credentials.
+
+External AI processing is off by default. Enable it only after the institution has approved the relevant data-processing and confidentiality policy.
+
+## Security model
+
+- Institution boundaries are enforced for users, folders and documents.
+- Confidential documents require explicit access; classification changes are audited.
+- Password changes and administrative resets invalidate existing sessions.
+- External-link passwords use PBKDF2 and are submitted by POST, never through URLs.
+- Large direct uploads use signed stateless ownership claims that work across Worker isolates.
+- Active-content and executable uploads are rejected; accepted files are content-checked.
+- DOCX preview HTML is sanitized before rendering.
+
+Report security concerns privately to the repository owner rather than opening a public issue containing sensitive details.

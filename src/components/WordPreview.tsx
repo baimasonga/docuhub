@@ -5,6 +5,7 @@
 
 import React, { useEffect, useState } from 'react';
 import mammoth from 'mammoth';
+import DOMPurify from 'dompurify';
 import { Download, FileWarning, Loader2 } from 'lucide-react';
 
 interface WordPreviewProps {
@@ -46,7 +47,11 @@ export default function WordPreview({ documentId, fileName }: WordPreviewProps) 
         const buf = await res.arrayBuffer();
         const result = await mammoth.convertToHtml({ arrayBuffer: buf });
         if (cancelled) return;
-        setHtml(result.value);
+        setHtml(DOMPurify.sanitize(result.value, {
+          USE_PROFILES: { html: true },
+          FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'button'],
+          FORBID_ATTR: ['style', 'srcset']
+        }));
         setWarnings(result.messages.filter(m => m.type === 'warning').map(m => m.message));
         setLoading(false);
       } catch (err) {

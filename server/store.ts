@@ -37,13 +37,14 @@ export interface UserAuth {
   resetTokenHash?: string;       // sha256 of the emailed reset token
   resetTokenExpiresAt?: string;  // ISO timestamp
   lastLoginAt?: string;
+  sessionVersion?: number;       // incremented to invalidate every existing session
 }
 
 export type StoredUser = User & UserAuth;
 
 // Strip server-only fields before returning a user to any client.
 export function publicUser(u: StoredUser): User & { mustChangePassword?: boolean } {
-  const { passwordHash, resetTokenHash, resetTokenExpiresAt, ...rest } = u;
+  const { passwordHash, resetTokenHash, resetTokenExpiresAt, sessionVersion, ...rest } = u;
   return rest;
 }
 
@@ -98,6 +99,11 @@ export interface DataStore {
   listVersionsPendingOffload(): Promise<DocumentVersion[]>;
   /** Every version created at/after `sinceIso`, across all documents (external backups). */
   listVersionsCreatedSince(sinceIso: string): Promise<DocumentVersion[]>;
+  countVersionsWithStoragePath(storagePath: string): Promise<number>;
+
+  // Per-user stars (a personal preference, never global document state)
+  listStarredDocumentIds(userId: string): Promise<string[]>;
+  setDocumentStar(userId: string, documentId: string, starred: boolean): Promise<void>;
 
   // Share permissions
   listPermissionsForDocument(documentId: string): Promise<SharePermission[]>;
@@ -129,6 +135,7 @@ export interface DataStore {
   listActiveLinksForDocument(documentId: string): Promise<ExternalShareLink[]>;
   createLink(l: ExternalShareLink): Promise<void>;
   updateLink(id: string, patch: Partial<ExternalShareLink>): Promise<void>;
+  consumeExternalLink(id: string, countDownload: boolean): Promise<ExternalShareLink | null>;
   listAllLinks(): Promise<ExternalShareLink[]>;
 
   // External backup runs (e.g. to iDrive e2)

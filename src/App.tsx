@@ -74,6 +74,7 @@ import Sidebar from './components/Sidebar';
 import { LoginScreen, ResetPasswordScreen, ChangePasswordModal } from './components/Auth';
 const PdfEditor = React.lazy(() => import('./components/PdfEditor'));
 const WordPreview = React.lazy(() => import('./components/WordPreview'));
+const SAFE_FILE_ACCEPT = '.pdf,.docx,.xlsx,.pptx,.txt,.csv,.md,.json,.png,.jpg,.jpeg,.gif,.webp';
 
 // Word documents (.doc/.docx) can't be rendered by the browser the way
 // images/PDF/text can, so the preview modal routes them to WordPreview
@@ -234,7 +235,7 @@ export default function App() {
   const [upCategory, setUpCategory] = useState<Document['documentType']>('Other');
   // content = inline base64 (small files); storagePath = already uploaded
   // straight to object storage via a signed URL (large files).
-  const [upCustomFile, setUpCustomFile] = useState<{ name: string; content?: string; storagePath?: string; size: number; type: string } | null>(null);
+  const [upCustomFile, setUpCustomFile] = useState<{ name: string; content?: string; storagePath?: string; uploadClaim?: string; size: number; type: string } | null>(null);
   const [upDept, setUpDept] = useState('');
   const [upAutoFile, setUpAutoFile] = useState(true);
   const [uploadScan, setUploadScan] = useState<{
@@ -286,7 +287,7 @@ export default function App() {
   // Unified "Share link" modal state (Dropbox shareable link + WeTransfer-style
   // options: message, view-only, download limit, password, expiry).
   const [linkModalDocId, setLinkModalDocId] = useState<string | null>(null);
-  const [linkExpiry, setLinkExpiry] = useState<string>('7'); // days, or 'never'
+  const [linkExpiry, setLinkExpiry] = useState<string>('7');
   const [linkPassword, setLinkPassword] = useState<string>('');
   const [linkPermission, setLinkPermission] = useState<'Viewer' | 'Commenter'>('Viewer');
   const [linkMessage, setLinkMessage] = useState<string>('');
@@ -555,7 +556,7 @@ export default function App() {
       .catch(() => triggerToast('Could not delete folder.', 'error'));
   };
 
-  const scanUploadCandidate = async (candidate: { fileName: string; fileType: string; fileData?: string; storagePath?: string; fileSize?: number; department?: string }) => {
+  const scanUploadCandidate = async (candidate: { fileName: string; fileType: string; fileData?: string; storagePath?: string; uploadClaim?: string; fileSize?: number; department?: string }) => {
     if (!currentUser) return;
     setUploadScanLoading(true);
     setUploadScan(null);
@@ -568,6 +569,7 @@ export default function App() {
           fileType: candidate.fileType,
           fileData: candidate.fileData,
           storagePath: candidate.storagePath,
+          uploadClaim: candidate.uploadClaim,
           fileSize: candidate.fileSize,
           department: candidate.department || upDept || currentUser.department
         })
@@ -593,6 +595,7 @@ export default function App() {
     let filename = "";
     let filedata: string | undefined;
     let storagepath: string | undefined;
+    let uploadclaim: string | undefined;
     let size = 0;
     let type = "text/plain";
 
@@ -600,6 +603,7 @@ export default function App() {
       filename = upCustomFile.name;
       filedata = upCustomFile.content; // base64 (small files)
       storagepath = upCustomFile.storagePath; // direct-uploaded (large files)
+      uploadclaim = upCustomFile.uploadClaim;
       size = upCustomFile.size;
       type = upCustomFile.type;
     } else {
@@ -626,6 +630,7 @@ export default function App() {
         fileType: type,
         fileData: filedata,
         storagePath: storagepath,
+        uploadClaim: uploadclaim,
         department: upDept || currentUser.department,
         autoFile: upAutoFile
       })
@@ -675,13 +680,13 @@ export default function App() {
   const DIRECT_UPLOAD_THRESHOLD = 2.5 * 1024 * 1024;
 
   // Returns either { storagePath } (bytes already in storage) or { fileData }.
-  const prepareFilePayload = async (file: File): Promise<{ fileData?: string; storagePath?: string }> => {
+  const prepareFilePayload = async (file: File): Promise<{ fileData?: string; storagePath?: string; uploadClaim?: string }> => {
     if (file.size > DIRECT_UPLOAD_THRESHOLD) {
       try {
         const sign = await fetch('/api/uploads/sign', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileName: file.name, fileType: detectFileType(file) })
+          body: JSON.stringify({ fileName: file.name, fileType: detectFileType(file), fileSize: file.size })
         }).then(r => r.json());
         if (sign.enabled && sign.uploadUrl) {
           const put = await fetch(sign.uploadUrl, {
@@ -689,7 +694,7 @@ export default function App() {
             headers: { 'Content-Type': file.type || 'application/octet-stream' },
             body: file
           });
-          if (put.ok) return { storagePath: sign.objectPath };
+          if (put.ok) return { storagePath: sign.objectPath, uploadClaim: sign.uploadClaim };
           console.error('[upload] direct PUT failed:', put.status);
         }
       } catch (err) {
@@ -704,17 +709,18 @@ export default function App() {
     const ext = file.name.split('.').pop()?.toLowerCase();
     const fallbackTypes: Record<string, string> = {
       pdf: 'application/pdf',
-      doc: 'application/msword',
       docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      xls: 'application/vnd.ms-excel',
       xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       csv: 'text/csv',
       txt: 'text/plain',
       png: 'image/png',
       jpg: 'image/jpeg',
       jpeg: 'image/jpeg',
       gif: 'image/gif',
-      zip: 'application/zip'
+      webp: 'image/webp',
+      md: 'text/markdown',
+      json: 'application/json'
     };
     return (ext && fallbackTypes[ext]) || 'application/octet-stream';
   };
@@ -726,7 +732,8 @@ export default function App() {
       size: file.size,
       type: detectFileType(file),
       content: payload.fileData,
-      storagePath: payload.storagePath
+      storagePath: payload.storagePath,
+      uploadClaim: payload.uploadClaim
     });
     setUpTitle(file.name.replace(/\.[^/.]+$/, ""));
     setUpDesc('');
@@ -736,6 +743,7 @@ export default function App() {
       fileType: detectFileType(file),
       fileData: payload.fileData,
       storagePath: payload.storagePath,
+      uploadClaim: payload.uploadClaim,
       fileSize: file.size,
       department: upDept || currentUser?.department
     });
@@ -794,6 +802,7 @@ export default function App() {
         fileType: detectFileType(file),
         fileData: payload.fileData,
         storagePath: payload.storagePath,
+        uploadClaim: payload.uploadClaim,
         department: currentUser.department,
         autoFile: false
       })
@@ -860,7 +869,8 @@ export default function App() {
           fileSize: file.size,
           fileType: detectFileType(file),
           fileData: payload.fileData,
-          storagePath: payload.storagePath
+          storagePath: payload.storagePath,
+          uploadClaim: payload.uploadClaim
         })
       }))
       .then(res => res.json())
@@ -1058,7 +1068,7 @@ export default function App() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        expiresInDays: linkExpiry === 'never' ? null : Number(linkExpiry),
+        expiresInDays: Number(linkExpiry),
         password: pw || undefined,
         requiresPassword: Boolean(pw),
         permissionType: linkPermission,
@@ -1160,6 +1170,18 @@ export default function App() {
         reloadData();
       }
     });
+  };
+
+  const handleClassificationChange = async (docId: string, confidentialityLevel: Document['confidentialityLevel']) => {
+    const res = await fetch(`/api/documents/${docId}/classification`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confidentialityLevel })
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) return triggerToast(data.error || 'Could not update classification.', 'error');
+    triggerToast(`Classification changed to ${confidentialityLevel}.`, 'success');
+    fetchDocDetail(docId);
+    reloadData();
   };
 
   // Request Approval dispatch
@@ -1771,13 +1793,13 @@ export default function App() {
                     <>
                       <input
                         ref={quickFileUploadInputRef}
-                        type="file"
+                        type="file" accept={SAFE_FILE_ACCEPT}
                         onChange={handleQuickFileSelect}
                         className="hidden"
                       />
                       <input
                         ref={folderUploadInputRef}
-                        type="file"
+                        type="file" accept={SAFE_FILE_ACCEPT}
                         multiple
                         onChange={handleFolderUpload}
                         className="hidden"
@@ -2476,10 +2498,19 @@ export default function App() {
                 </div>
                 <div className={`flex justify-between p-1.5 rounded-lg border border-indigo-150/50 mt-1 ${docDetail.document.confidentialityLevel === 'Official Record' ? 'bg-emerald-50/50' : 'bg-indigo-50/50'}`}>
                   <span className="text-slate-500 font-bold text-[10px]">Security Lock</span>
-                  <span className="font-bold text-[9px] font-mono text-indigo-700 lowercase flex items-center">
-                    <Lock className="w-3 h-3 mr-1" />
-                    {docDetail.document.confidentialityLevel}
-                  </span>
+                  {currentUser && ['Admin', 'Manager'].includes(currentUser.role) ? (
+                    <select
+                      value={docDetail.document.confidentialityLevel}
+                      onChange={e => handleClassificationChange(docDetail.document.id, e.target.value as Document['confidentialityLevel'])}
+                      className="text-[9px] font-bold text-indigo-700 bg-transparent border-0"
+                    >
+                      <option>Normal File</option><option>Official Record</option><option>Confidential</option><option>Archive</option>
+                    </select>
+                  ) : (
+                    <span className="font-bold text-[9px] font-mono text-indigo-700 lowercase flex items-center">
+                      <Lock className="w-3 h-3 mr-1" />{docDetail.document.confidentialityLevel}
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
@@ -2664,7 +2695,7 @@ export default function App() {
                   <label className="text-[9px] text-indigo-600 font-bold hover:underline cursor-pointer flex items-center space-x-0.5">
                     <Plus className="w-3 h-3 text-indigo-500" />
                     <span>Upload Version</span>
-                    <input type="file" onChange={handleNewVersionUpload} className="hidden" />
+                    <input type="file" accept={SAFE_FILE_ACCEPT} onChange={handleNewVersionUpload} className="hidden" />
                   </label>
                 )}
               </div>
@@ -2833,6 +2864,7 @@ export default function App() {
                 <div className="border-2 border-dashed border-slate-200 hover:border-indigo-300 rounded-xl p-4 text-center cursor-pointer relative bg-slate-50/50 hover:bg-indigo-50/10">
                   <input
                     type="file"
+                    accept={SAFE_FILE_ACCEPT}
                     onChange={handleCustomFileChange}
                     className="absolute inset-0 opacity-0 cursor-pointer"
                   />
@@ -3128,7 +3160,6 @@ export default function App() {
                       <option value="1">In 24 hours</option>
                       <option value="7">In 7 days</option>
                       <option value="30">In 30 days</option>
-                      <option value="never">Never</option>
                     </select>
                   </div>
                   <div className="space-y-1.5">
@@ -3152,7 +3183,7 @@ export default function App() {
 
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase flex items-center space-x-1"><Lock className="w-3 h-3" /><span>Password (optional)</span></label>
-                  <input type="text" value={linkPassword} onChange={(e) => setLinkPassword(e.target.value)} placeholder="Leave blank for no password" className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none" />
+                  <input type="password" minLength={10} maxLength={128} value={linkPassword} onChange={(e) => setLinkPassword(e.target.value)} placeholder="At least 10 characters" className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none" />
                 </div>
 
                 <button onClick={handleCreateShareLink} disabled={linkLoading} className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-extrabold flex items-center justify-center space-x-2">
@@ -3182,7 +3213,7 @@ export default function App() {
                   <span className="px-2 py-1 bg-slate-100 rounded-md text-slate-600">{createdLink.permissionType === 'Commenter' ? 'CAN COMMENT' : 'VIEW ONLY'}</span>
                   <span className="px-2 py-1 bg-slate-100 rounded-md text-slate-600">{createdLink.allowDownload === false ? 'NO DOWNLOAD' : 'DOWNLOADABLE'}</span>
                   {createdLink.hasPassword && <span className="px-2 py-1 bg-amber-50 text-amber-700 rounded-md flex items-center space-x-1"><Lock className="w-3 h-3" /><span>PASSWORD</span></span>}
-                  <span className="px-2 py-1 bg-slate-100 rounded-md text-slate-600">{new Date(createdLink.expiresAt).getFullYear() > 2900 ? 'NO EXPIRY' : `EXPIRES ${new Date(createdLink.expiresAt).toLocaleDateString()}`}</span>
+                  <span className="px-2 py-1 bg-slate-100 rounded-md text-slate-600">EXPIRES {new Date(createdLink.expiresAt).toLocaleDateString()}</span>
                   <span className="px-2 py-1 bg-emerald-50 text-emerald-700 rounded-md flex items-center space-x-1"><Eye className="w-3 h-3" /><span>VIEWED {createdLink.accessCount}×</span></span>
                   <span className="px-2 py-1 bg-sky-50 text-sky-700 rounded-md flex items-center space-x-1"><Download className="w-3 h-3" /><span>{createdLink.downloadCount || 0}{createdLink.maxDownloads ? `/${createdLink.maxDownloads}` : ''} DL</span></span>
                 </div>
