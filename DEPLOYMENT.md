@@ -113,8 +113,11 @@ observability, and a 30-second CPU safety ceiling).
    validation or deployment.
 5. Add the required secrets under the Worker's **Settings → Variables and
    Secrets**. Keep the existing non-secret values from `wrangler.toml`.
-6. Confirm `avdpdocs.org` appears under the Worker's custom domains. The
-   `[[routes]]` entry in `wrangler.toml` declares it during deployment.
+6. For the temporary deployment, record the generated
+   `https://docuhub.<account>.workers.dev` URL from the first successful build.
+   Update `APP_URL` in `wrangler.toml` to that exact URL and redeploy before
+   testing authentication. When `avdpdocs.org` is later added to Cloudflare,
+   restore it as a custom domain and set `APP_URL=https://avdpdocs.org`.
 
 Required production secrets:
 
