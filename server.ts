@@ -875,18 +875,23 @@ function collectFolderTreeIds(folders: Folder[], folderId: string): string[] {
 // AI-OCR and automated tagging (Gemini, with local heuristic fallback)
 // ----------------------------------------------------
 let aiClient: GoogleGenAI | null = null;
+// The key the cached client was built with, so a rotated GEMINI_API_KEY (or the
+// feature being switched off) takes effect without a restart.
+let aiClientKey: string | null = null;
+
 function getGeminiClient(): GoogleGenAI | null {
-  if (!aiClient) {
-    if (process.env.ENABLE_EXTERNAL_AI !== 'true') return null;
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      console.warn('GEMINI_API_KEY environment variable is missing. Multimodal OCR & Tags will use premium local heuristics simulation.');
-      return null;
-    }
+  if (process.env.ENABLE_EXTERNAL_AI !== 'true') return null;
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    console.warn('GEMINI_API_KEY environment variable is missing. Multimodal OCR & Tags will use premium local heuristics simulation.');
+    return null;
+  }
+  if (!aiClient || aiClientKey !== apiKey) {
     aiClient = new GoogleGenAI({
       apiKey,
       httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
     });
+    aiClientKey = apiKey;
   }
   return aiClient;
 }
@@ -1253,7 +1258,9 @@ app.get('/api/session', h(async (req, res) => {
     user: user ? publicUser(user) : null,
     mustChangePassword: Boolean(user?.mustChangePassword),
     // 0 means Trash never auto-purges; the UI uses this to explain the wait.
-    trashRetentionDays: trashRetentionDays()
+    trashRetentionDays: trashRetentionDays(),
+    // Whether ENABLE_EXTERNAL_AI + GEMINI_API_KEY are both configured.
+    aiAssistantEnabled: getGeminiClient() !== null
   });
 }));
 
@@ -2607,6 +2614,127 @@ app.post('/api/comments', h(async (req, res) => {
     body: text.length > 140 ? `${text.substring(0, 140)}...` : text
   });
   res.json(newComment);
+}));
+
+// ----------------------------------------------------
+// AI ASSISTANT
+// ----------------------------------------------------
+// Per-process sliding window, same shape (and same Workers caveat) as the
+// login limiter: an unbounded question box in front of a metered API is a cost
+// incident waiting to happen.
+const aiAskAttempts = new Map<string, { count: number; windowStart: number }>();
+const AI_WINDOW_MS = 60 * 60 * 1000;
+const AI_MAX_QUESTIONS_PER_HOUR = 30;
+const AI_MAX_DOCUMENTS = 10;
+const AI_CONTEXT_CHARS_PER_DOCUMENT = 6000;
+
+function aiRateLimited(userId: string): boolean {
+  const now = Date.now();
+  const entry = aiAskAttempts.get(userId);
+  if (!entry || now - entry.windowStart > AI_WINDOW_MS) {
+    aiAskAttempts.set(userId, { count: 1, windowStart: now });
+    return false;
+  }
+  entry.count++;
+  return entry.count > AI_MAX_QUESTIONS_PER_HOUR;
+}
+
+// Ask a question about documents the caller can already read. Answers come from
+// the indexed text DocuHub already holds -- no binaries are re-uploaded -- and
+// the model is told to answer only from that context so it cites rather than
+// speculates.
+app.post('/api/ai/ask', h(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+
+  const ai = getGeminiClient();
+  if (!ai) {
+    return res.status(503).json({
+      error: 'The AI assistant is switched off. An Admin must set ENABLE_EXTERNAL_AI=true and GEMINI_API_KEY after the institution approves external AI processing.'
+    });
+  }
+
+  const { documentIds, question } = req.body ?? {};
+  const ids = Array.isArray(documentIds) ? documentIds.map(String) : [];
+  const prompt = String(question ?? '').trim();
+
+  if (ids.length === 0) return res.status(400).json({ error: 'Select at least one document to ask about.' });
+  if (ids.length > AI_MAX_DOCUMENTS) {
+    return res.status(400).json({ error: `Ask about at most ${AI_MAX_DOCUMENTS} documents at a time.` });
+  }
+  if (prompt.length < 3) return res.status(400).json({ error: 'Ask a question of at least 3 characters.' });
+  if (prompt.length > 1000) return res.status(400).json({ error: 'Questions are limited to 1000 characters.' });
+  if (aiRateLimited(user.id)) {
+    return res.status(429).json({ error: `You have reached the limit of ${AI_MAX_QUESTIONS_PER_HOUR} AI questions per hour.` });
+  }
+
+  const documents: Document[] = [];
+  for (const id of ids) {
+    const doc = await db().getDocument(id);
+    if (!doc || doc.isDeleted) return res.status(404).json({ error: 'One of the selected documents is unavailable.' });
+    // The assistant must never widen what someone can read: every document
+    // goes through the same view guard the document API uses.
+    if (!(await canViewDocument(user, doc))) {
+      return res.status(403).json({ error: `You do not have access to "${doc.title}".` });
+    }
+    // Confidential material is exactly what the ENABLE_EXTERNAL_AI policy gate
+    // exists to protect, so it never leaves the institution this way -- even
+    // for an Admin, and even with external AI switched on.
+    if (doc.confidentialityLevel === 'Confidential') {
+      return res.status(403).json({ error: `"${doc.title}" is confidential and cannot be sent to the AI assistant.` });
+    }
+    documents.push(doc);
+  }
+
+  const context = documents.map((doc, index) => {
+    const indexed = (doc.ocrText || '').slice(0, AI_CONTEXT_CHARS_PER_DOCUMENT);
+    return [
+      `--- DOCUMENT ${index + 1} ---`,
+      `Title: ${doc.title}`,
+      `Type: ${doc.documentType} | Status: ${doc.status} | Owner: ${doc.ownerName}`,
+      doc.description ? `Description: ${doc.description}` : '',
+      doc.tags.length > 0 ? `Tags: ${doc.tags.join(', ')}` : '',
+      `Indexed text: ${indexed || '(no text was extracted from this file)'}`
+    ].filter(Boolean).join('\n');
+  }).join('\n\n');
+
+  try {
+    const response = await withTimeout(ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: {
+        parts: [{
+          text: `You are the assistant inside the AVDP Document Management System. Answer the user's question using ONLY the documents below.
+
+Rules:
+- If the documents do not contain the answer, say so plainly. Never guess or draw on outside knowledge.
+- Refer to documents by their title, not by number.
+- Be concise: a short paragraph, or a short list when comparing documents.
+
+${context}
+
+--- QUESTION ---
+${prompt}`
+        }]
+      }
+    }), 30000, 'AI assistant');
+
+    const answer = response?.text?.trim();
+    if (!answer) return res.status(502).json({ error: 'The AI assistant returned an empty response. Try again.' });
+
+    await logActivity(
+      user, 'AI Query', documents.length === 1 ? documents[0].id : undefined,
+      documents.length === 1 ? documents[0].title : `${documents.length} documents`,
+      `Asked the AI assistant about ${documents.map(d => `"${d.title}"`).join(', ')}: "${prompt.substring(0, 120)}${prompt.length > 120 ? '...' : ''}"`
+    );
+
+    res.json({
+      answer,
+      sources: documents.map(d => ({ id: d.id, title: d.title }))
+    });
+  } catch (err: any) {
+    console.error('[ai] assistant query failed:', err?.message || err);
+    res.status(502).json({ error: 'The AI assistant could not be reached. Try again shortly.' });
+  }
 }));
 
 // ----------------------------------------------------

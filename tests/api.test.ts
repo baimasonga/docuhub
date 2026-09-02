@@ -622,6 +622,66 @@ test('in-app notifications reach the recipient and nobody else', async () => {
   assert.equal(cleared.unreadCount, 0, 'read-all clears the badge');
 });
 
+test('the AI assistant stays off until an Admin enables external AI', async () => {
+  const res = await api('admin', 'POST', '/api/ai/ask', { documentIds: [docId], question: 'What is this?' });
+  assert.equal(res.status, 503, 'no ENABLE_EXTERNAL_AI means the endpoint refuses rather than silently degrading');
+  assert.match((await res.json()).error, /ENABLE_EXTERNAL_AI/);
+});
+
+test('AI assistant validates its input and never widens document access', async () => {
+  // Turn the feature on with a dummy key: every check below must reject the
+  // request before any call to the model is attempted.
+  // Uploaded before the feature is switched on so the upload's own indexing
+  // never reaches for the network with a dummy key.
+  const secret = await api('admin', 'POST', '/api/documents/upload', {
+    title: 'Assistant Access Fixture', description: 'Finance only', documentType: 'Report',
+    department: 'Finance',
+    fileName: 'assistant_fixture.txt', fileType: 'text/plain', fileSize: 9,
+    fileData: Buffer.from('fixture').toString('base64')
+  });
+  assert.equal(secret.status, 201);
+  const secretId = (await secret.json()).document.id;
+  assert.equal((await api('staff', 'GET', `/api/documents/${secretId}`)).status, 403, 'fixture is out of reach for staff');
+
+  const previousFlag = process.env.ENABLE_EXTERNAL_AI;
+  const previousKey = process.env.GEMINI_API_KEY;
+  process.env.ENABLE_EXTERNAL_AI = 'true';
+  process.env.GEMINI_API_KEY = 'test-key-not-used';
+  try {
+    const ask = (actor: string, body: unknown) => api(actor, 'POST', '/api/ai/ask', body);
+
+    assert.equal((await ask('admin', { documentIds: [], question: 'Anything?' })).status, 400);
+    assert.equal((await ask('admin', { documentIds: [docId], question: 'hi' })).status, 400, 'the question has a minimum length');
+    assert.equal((await ask('admin', { documentIds: [docId], question: 'x'.repeat(1001) })).status, 400);
+    assert.equal(
+      (await ask('admin', { documentIds: Array(11).fill(docId), question: 'Summarise these' })).status, 400,
+      'the batch size is capped'
+    );
+    assert.equal((await ask('admin', { documentIds: ['doc-does-not-exist'], question: 'What is this?' })).status, 404);
+
+    // A document the caller cannot read must be refused by the assistant too.
+    assert.equal(
+      (await ask('staff', { documentIds: [secretId], question: 'What does it say?' })).status, 403,
+      'the assistant must not read out a document the caller cannot open'
+    );
+
+    // Confidential material never leaves the institution through the assistant,
+    // even for an Admin with external AI switched on.
+    const classify = await api('admin', 'POST', `/api/documents/${secretId}/classification`, {
+      confidentialityLevel: 'Confidential'
+    });
+    assert.equal(classify.status, 200);
+    const confidential = await ask('admin', { documentIds: [secretId], question: 'What does it say?' });
+    assert.equal(confidential.status, 403);
+    assert.match((await confidential.json()).error, /confidential/i);
+  } finally {
+    if (previousFlag === undefined) delete process.env.ENABLE_EXTERNAL_AI;
+    else process.env.ENABLE_EXTERNAL_AI = previousFlag;
+    if (previousKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = previousKey;
+  }
+});
+
 test('admin reset issues a fresh temp password and invalidates the old one', async () => {
   const res = await api('admin', 'POST', `/api/users/${staffId}/reset-password`, {});
   assert.equal(res.status, 200);

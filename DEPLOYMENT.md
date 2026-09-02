@@ -65,8 +65,8 @@ dashboard; Railway: service variables):
 | `EMAIL_FROM` | optional | Sender, e.g. `DocuHub <docs@yourdomain.com>`. Defaults to Resend's shared onboarding sender |
 | `RESEND_SHARE_TEMPLATE_ID` | optional | When set, share and share-link emails only use this Resend dashboard template instead of the built-in HTML. Other emails are unaffected |
 | `APP_URL` | yes, on a custom domain | Canonical HTTPS origin used for OAuth, email links and origin validation. May be left unset on the temporary `*.workers.dev` hostname, where the server derives it from the request host |
-| `GEMINI_API_KEY` | optional | AI OCR/tagging key; ignored unless external AI is explicitly enabled |
-| `ENABLE_EXTERNAL_AI` | optional | Set to `true` only after institutional approval; default is off |
+| `GEMINI_API_KEY` | optional | Key for AI OCR/tagging and the document assistant; ignored unless external AI is explicitly enabled |
+| `ENABLE_EXTERNAL_AI` | optional | Set to `true` only after institutional approval; default is off. Gates both upload indexing and the "Ask Gemini" assistant |
 | `TRASH_RETENTION_DAYS` | optional | Days a soft-deleted document stays recoverable in Trash before the nightly job purges it and its stored files. Defaults to `30`; set to `0` to disable automatic purging where a records-retention policy forbids unattended deletion |
 | `ALLOWED_EMAIL_DOMAIN` | set (in `wrangler.toml`) | Restrict user emails to one domain. Set to `avdp.org.sl` in `wrangler.toml` `[vars]` -- unset = any valid email |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | optional | Enables "Sign in with Google" (redirect URI: `<APP_URL>/api/auth/oauth/google/callback`). Only works for accounts an Admin already created (matched by email) -- not a self-registration path |
@@ -206,6 +206,11 @@ Sign in locally with the seeded admin and the value of
   per-process login rate limiter.
 - **Email**: transactional notifications (invite, approval requested/decided,
   document shared, password reset) via Resend; best-effort with timeouts.
+- **AI assistant**: with external AI enabled, "Ask Gemini" answers questions
+  about selected documents from the text already indexed at upload -- no file
+  binaries are re-sent. Every document goes through the same view guard as the
+  document API, confidential documents are refused outright, and questions are
+  rate-limited per user.
 - **In-app notifications**: shares, approval requests, approval decisions and
   comments queue a notification for the recipient, read from the bell in the
   header (polled once a minute). Independent of Resend, so an institution

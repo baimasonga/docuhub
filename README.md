@@ -38,7 +38,7 @@ GitHub Actions runs these checks for every pull request and every push to `main`
 
 Apply every SQL migration in `supabase/migrations/` in numeric order, then configure the required environment variables described in [DEPLOYMENT.md](DEPLOYMENT.md). Never commit service-role keys, session secrets, initial passwords, email credentials, OAuth secrets, AI keys, or backup credentials.
 
-External AI processing is off by default. Enable it only after the institution has approved the relevant data-processing and confidentiality policy.
+External AI processing is off by default. Enable it only after the institution has approved the relevant data-processing and confidentiality policy. It gates both upload indexing and the "Ask Gemini" document assistant; documents classified Confidential are never sent to the assistant, regardless of the setting or the asker's role.
 
 ## Security model
 

@@ -237,6 +237,12 @@ export default function App() {
   const [trashRetentionDays, setTrashRetentionDays] = useState(0);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notifMenuOpen, setNotifMenuOpen] = useState(false);
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const [showAiModal, setShowAiModal] = useState(false);
+  const [aiDocIds, setAiDocIds] = useState<string[]>([]);
+  const [aiQuestion, setAiQuestion] = useState('');
+  const [aiAnswer, setAiAnswer] = useState<{ answer: string; sources: { id: string; title: string }[] } | null>(null);
+  const [aiPending, setAiPending] = useState(false);
 
   // Modals visibility triggers
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -336,6 +342,7 @@ export default function App() {
           setCurrentUser(session.user);
           setMustChangePassword(Boolean(session.mustChangePassword));
           if (typeof session.trashRetentionDays === 'number') setTrashRetentionDays(session.trashRetentionDays);
+          setAiEnabled(Boolean(session.aiAssistantEnabled));
         }
       })
       .catch(err => console.error('[bootstrap] session restore failed:', err))
@@ -443,6 +450,32 @@ export default function App() {
     setSelectedIds(new Set());
     setOpenMenuId(null);
   }, [currentView, currentFolderId]);
+
+  const openAiModal = (docIds: string[]) => {
+    setAiDocIds(docIds);
+    setAiQuestion('');
+    setAiAnswer(null);
+    setShowAiModal(true);
+  };
+
+  const handleAiAsk = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (aiPending || aiQuestion.trim().length < 3) return;
+    setAiPending(true);
+    setAiAnswer(null);
+    fetch('/api/ai/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ documentIds: aiDocIds, question: aiQuestion.trim() })
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.answer) setAiAnswer({ answer: data.answer, sources: data.sources || [] });
+        else triggerToast(data.error || 'The AI assistant could not answer that.', 'error');
+      })
+      .catch(() => triggerToast('The AI assistant could not be reached.', 'error'))
+      .finally(() => setAiPending(false));
+  };
 
   const loadNotifications = () => {
     if (!currentUser) return;
@@ -2142,9 +2175,12 @@ export default function App() {
 
                       <button
                         type="button"
-                        disabled
-                        title="AI assistant coming soon"
-                        className="ml-2 hidden items-center gap-1.5 rounded-full border border-slate-300 bg-white/40 px-3 py-1.5 text-[11px] font-bold text-slate-400 sm:inline-flex disabled:cursor-not-allowed"
+                        disabled={!aiEnabled}
+                        onClick={() => openAiModal(Array.from(selectedIds))}
+                        title={aiEnabled
+                          ? 'Ask a question about the selected documents'
+                          : 'The AI assistant is switched off for this institution'}
+                        className="ml-2 hidden items-center gap-1.5 rounded-full border border-slate-300 bg-white/40 px-3 py-1.5 text-[11px] font-bold text-slate-600 sm:inline-flex hover:border-indigo-200 hover:bg-indigo-50/60 hover:text-indigo-700 disabled:cursor-not-allowed disabled:text-slate-400 disabled:hover:border-slate-300 disabled:hover:bg-white/40"
                       >
                         <Sparkles className="w-3.5 h-3.5" />
                         <span>Ask Gemini</span>
@@ -3603,6 +3639,67 @@ export default function App() {
       )}
 
       {/* 5. MODAL: MOVE LOCATION */}
+      {showAiModal && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
+              <h3 className="font-display font-extrabold text-slate-800 text-sm flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-indigo-500" />
+                Ask about {aiDocIds.length} document{aiDocIds.length === 1 ? '' : 's'}
+              </h3>
+              <button onClick={() => setShowAiModal(false)} className="p-1 hover:bg-slate-100 rounded">
+                <X className="w-4 h-4 text-slate-400" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAiAsk} className="space-y-4 text-xs font-medium text-slate-600">
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Your question</label>
+                <textarea
+                  value={aiQuestion}
+                  onChange={(e) => setAiQuestion(e.target.value)}
+                  maxLength={1000}
+                  placeholder="e.g. What are the payment terms across these contracts?"
+                  className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none resize-none h-20"
+                />
+                <p className="text-[9px] text-slate-400">
+                  Answers come only from the text DocuHub has already indexed for these documents.
+                  Confidential documents are never sent to the assistant.
+                </p>
+              </div>
+
+              <button
+                type="submit"
+                disabled={aiPending || aiQuestion.trim().length < 3}
+                className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-extrabold shadow-sm shadow-indigo-100 transition-all disabled:cursor-not-allowed disabled:bg-indigo-300 flex items-center justify-center gap-1.5"
+              >
+                {aiPending ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                <span>{aiPending ? 'Reading documents...' : 'Ask'}</span>
+              </button>
+            </form>
+
+            {aiAnswer && (
+              <div className="mt-4 space-y-2">
+                <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 text-[11px] leading-relaxed text-slate-700 whitespace-pre-wrap">
+                  {aiAnswer.answer}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {aiAnswer.sources.map(source => (
+                    <button
+                      key={source.id}
+                      onClick={() => { setShowAiModal(false); setSelectedDocId(source.id); }}
+                      className="rounded-full border border-slate-150 bg-white px-2 py-1 text-[9px] font-semibold text-slate-500 hover:border-indigo-200 hover:text-indigo-600"
+                    >
+                      {source.title}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {showMoveModal && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs">
           <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 mx-4">
