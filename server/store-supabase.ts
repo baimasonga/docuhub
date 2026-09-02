@@ -14,7 +14,7 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import {
   User, Folder, Document, DocumentVersion, SharePermission,
-  ApprovalRequest, ActivityLog, Comment, ExternalShareLink, Institution, BackupRun
+  ApprovalRequest, ActivityLog, Comment, ExternalShareLink, Institution, BackupRun, Notification
 } from '../src/types';
 import {
   DataStore, DocumentFilter, StoredUser,
@@ -160,6 +160,17 @@ const logToRow = (l: Partial<ActivityLog>): Row => omitUndefined({
   id: l.id, user_id: l.userId, user_name: l.userName, user_role: l.userRole,
   action: l.action, document_id: l.documentId, document_title: l.documentTitle,
   details: l.details, created_at: l.createdAt
+});
+
+const notificationFromRow = (r: Row): Notification => ({
+  id: r.id, userId: r.user_id, type: r.type, title: r.title, body: r.body || '',
+  documentId: r.document_id ?? null, actorName: r.actor_name || '',
+  isRead: r.is_read, createdAt: r.created_at
+});
+const notificationToRow = (n: Partial<Notification>): Row => omitUndefined({
+  id: n.id, user_id: n.userId, type: n.type, title: n.title, body: n.body,
+  document_id: n.documentId, actor_name: n.actorName, is_read: n.isRead,
+  created_at: n.createdAt
 });
 
 const linkFromRow = (r: Row): ExternalShareLink => ({
@@ -579,6 +590,32 @@ export class SupabaseStore implements DataStore {
   }
   async createLog(l: ActivityLog) {
     SupabaseStore.unwrap(await this.from('activity_logs').insert(logToRow(l)).select('id').single(), 'createLog');
+  }
+
+  // ---- Notifications ----
+  async listNotificationsForUser(userId: string, limit = 50) {
+    const data = SupabaseStore.unwrap(
+      await this.from('notifications').select('*')
+        .eq('user_id', userId).order('created_at', { ascending: false }).limit(limit),
+      'listNotificationsForUser');
+    return (data as Row[]).map(notificationFromRow);
+  }
+  async createNotification(n: Notification) {
+    SupabaseStore.unwrap(await this.from('notifications').insert(notificationToRow(n)).select('id').single(), 'createNotification');
+  }
+  async markNotificationRead(id: string, userId: string) {
+    const data = SupabaseStore.unwrap(
+      await this.from('notifications').update({ is_read: true })
+        .eq('id', id).eq('user_id', userId).select('id'),
+      'markNotificationRead');
+    return (data as Row[]).length > 0;
+  }
+  async markAllNotificationsRead(userId: string) {
+    const data = SupabaseStore.unwrap(
+      await this.from('notifications').update({ is_read: true })
+        .eq('user_id', userId).eq('is_read', false).select('id'),
+      'markAllNotificationsRead');
+    return (data as Row[]).length;
   }
 
   // ---- External links ----

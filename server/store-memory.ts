@@ -10,7 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import {
   User, Folder, Document, DocumentVersion, SharePermission,
-  ApprovalRequest, ActivityLog, Comment, ExternalShareLink, Institution, BackupRun
+  ApprovalRequest, ActivityLog, Comment, ExternalShareLink, Institution, BackupRun, Notification
 } from '../src/types';
 import {
   DataStore, DocumentFilter, StoredUser,
@@ -28,6 +28,7 @@ interface Collections {
   comments: Comment[];
   logs: ActivityLog[];
   externalLinks: ExternalShareLink[];
+  notifications: Notification[];
   backupRuns: BackupRun[];
   documentStars: Array<{ userId: string; documentId: string }>;
 }
@@ -42,7 +43,7 @@ export class MemoryStore implements DataStore {
   private db: Collections = {
     users: [], institutions: [], folders: [], documents: [], versions: [],
     permissions: [], approvals: [], comments: [], logs: [], externalLinks: [],
-    backupRuns: [], documentStars: []
+    notifications: [], backupRuns: [], documentStars: []
   };
 
   /** filePath === null disables file persistence (Workers, tests). */
@@ -285,6 +286,28 @@ export class MemoryStore implements DataStore {
   }
   async createComment(c: Comment) { this.db.comments.push(c); this.flush(); }
   async listAllComments() { return this.db.comments.map(c => ({ ...c })); }
+
+  // ---- Notifications ----
+  async listNotificationsForUser(userId: string, limit = 50) {
+    return this.db.notifications
+      .filter(n => n.userId === userId)
+      .sort(byNewest)
+      .slice(0, limit)
+      .map(n => ({ ...n }));
+  }
+  async createNotification(n: Notification) { this.db.notifications.push(n); this.flush(); }
+  async markNotificationRead(id: string, userId: string) {
+    const found = this.db.notifications.find(n => n.id === id && n.userId === userId);
+    if (!found) return false;
+    if (!found.isRead) { found.isRead = true; this.flush(); }
+    return true;
+  }
+  async markAllNotificationsRead(userId: string) {
+    const unread = this.db.notifications.filter(n => n.userId === userId && !n.isRead);
+    unread.forEach(n => { n.isRead = true; });
+    if (unread.length > 0) this.flush();
+    return unread.length;
+  }
 
   // ---- Logs ----
   async listLogs(limit = 500) {

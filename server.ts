@@ -28,7 +28,8 @@ import {
   ExternalShareLink,
   DashboardStats,
   Institution,
-  ActivityDimension
+  ActivityDimension,
+  NotificationType
 } from './src/types';
 import { DataStore, StoredUser, publicUser, DocumentFilter, DEFAULT_INSTITUTION_ID } from './server/store';
 import { MemoryStore } from './server/store-memory';
@@ -523,6 +524,38 @@ async function attachLatestFileMetadata(docs: Document[]): Promise<Document[]> {
 // activity log has no foreign key to dms_users, so a non-user id is safe here
 // and keeps automated deletions visibly distinct from anything a person did.
 const SYSTEM_ACTOR = { id: 'system', fullName: 'DocuHub (scheduled task)', role: 'Admin' as const };
+
+// Queue an in-app notification. Email delivery is optional (RESEND_API_KEY may
+// be unset) and best-effort, so this is the only channel guaranteed to reach a
+// recipient -- but it must never fail the action that triggered it, so a write
+// error is logged and swallowed exactly like the audit trail's.
+async function notify(opts: {
+  userId: string;
+  type: NotificationType;
+  title: string;
+  body?: string;
+  documentId?: string;
+  actorName: string;
+  /** Skipped when the recipient is the person who caused the event. */
+  actorId?: string;
+}): Promise<void> {
+  if (opts.actorId && opts.actorId === opts.userId) return;
+  try {
+    await db().createNotification({
+      id: newId('notif'),
+      userId: opts.userId,
+      type: opts.type,
+      title: opts.title,
+      body: opts.body || '',
+      documentId: opts.documentId ?? null,
+      actorName: opts.actorName,
+      isRead: false,
+      createdAt: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('[notify] failed to queue notification:', (err as Error).message);
+  }
+}
 
 // Hard-delete a document and the Storage objects only it referenced. Shared by
 // the manual purge route and the nightly retention job.
@@ -2261,6 +2294,12 @@ app.post('/api/documents/:id/request-approval', h(async (req, res) => {
   });
 
   await logActivity(user, 'Approval Requested', docId, doc.title, `Requested official status review from Manager: ${approver.fullName}`);
+  await notify({
+    userId: approverId, actorId: user.id, actorName: user.fullName,
+    type: 'Approval Requested', documentId: docId,
+    title: `${user.fullName} asked you to approve "${doc.title}"`,
+    body: comment || 'No comment was provided with the request.'
+  });
   const mail = approvalRequestedEmail({
     approverName: approver.fullName, requesterName: user.fullName,
     documentTitle: doc.title, comment: comment || '', baseUrl: requestBaseUrl(req)
@@ -2316,6 +2355,12 @@ app.post('/api/approvals/:id/decide', h(async (req, res) => {
   await logActivity(user, status, doc.id, doc.title, `Manager ${user.fullName} decided "${status}" for document. Statement: "${comment}"`);
   const requester = await db().getUser(approval.requestedBy);
   if (requester) {
+    await notify({
+      userId: requester.id, actorId: user.id, actorName: user.fullName,
+      type: 'Approval Decided', documentId: doc.id,
+      title: `${user.fullName} marked "${doc.title}" as ${status}`,
+      body: comment || 'Resolved without further comment.'
+    });
     const mail = approvalDecidedEmail({
       requesterName: requester.fullName, deciderName: user.fullName,
       documentTitle: doc.title, decision: status, comment: comment || '', baseUrl: requestBaseUrl(req)
@@ -2357,6 +2402,12 @@ app.post('/api/documents/:id/share', h(async (req, res) => {
   });
 
   await logActivity(user, 'Share', docId, doc.title, `Shared document access level: ${permissionType} configuration with recipient user ${targetUser.fullName}`);
+  await notify({
+    userId: targetUserId, actorId: user.id, actorName: user.fullName,
+    type: 'Share', documentId: docId,
+    title: `${user.fullName} shared "${doc.title}" with you`,
+    body: `You have ${String(permissionType).toLowerCase()} access.`
+  });
   const mail = documentSharedEmail({
     recipientName: targetUser.fullName, sharerName: user.fullName,
     documentTitle: doc.title, permissionType, baseUrl: requestBaseUrl(req)
@@ -2549,7 +2600,41 @@ app.post('/api/comments', h(async (req, res) => {
   };
   await db().createComment(newComment);
   await logActivity(user, 'Comment', documentId, doc.title, `Added comment: "${text.substring(0, 60)}${text.length > 60 ? '...' : ''}"`);
+  await notify({
+    userId: doc.ownerId, actorId: user.id, actorName: user.fullName,
+    type: 'Comment', documentId,
+    title: `${user.fullName} commented on "${doc.title}"`,
+    body: text.length > 140 ? `${text.substring(0, 140)}...` : text
+  });
   res.json(newComment);
+}));
+
+// ----------------------------------------------------
+// NOTIFICATIONS
+// ----------------------------------------------------
+// A user's own notifications, newest first. Scoped to the caller -- there is
+// no route that reads anybody else's.
+app.get('/api/notifications', h(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+  const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '50'), 10) || 50, 1), 100);
+  const notifications = await db().listNotificationsForUser(user.id, limit);
+  res.json({ notifications, unreadCount: notifications.filter(n => !n.isRead).length });
+}));
+
+app.post('/api/notifications/:id/read', h(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+  const marked = await db().markNotificationRead(req.params.id, user.id);
+  if (!marked) return res.status(404).json({ error: 'Notification not found.' });
+  res.json({ success: true });
+}));
+
+app.post('/api/notifications/read-all', h(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+  const marked = await db().markAllNotificationsRead(user.id);
+  res.json({ success: true, marked });
 }));
 
 // Audit logs (Admin / Auditor)

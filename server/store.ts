@@ -26,6 +26,7 @@ import {
   Comment,
   ExternalShareLink,
   Institution,
+  Notification,
   BackupRun
 } from '../src/types';
 
@@ -128,6 +129,14 @@ export interface DataStore {
   listCommentsForDocument(documentId: string): Promise<Comment[]>;
   createComment(c: Comment): Promise<void>;
   listAllComments(): Promise<Comment[]>;
+
+  // In-app notifications (newest first)
+  listNotificationsForUser(userId: string, limit?: number): Promise<Notification[]>;
+  createNotification(n: Notification): Promise<void>;
+  /** Marks one notification read. Resolves false when it is missing or not the user's. */
+  markNotificationRead(id: string, userId: string): Promise<boolean>;
+  /** Marks every unread notification for the user read; resolves how many changed. */
+  markAllNotificationsRead(userId: string): Promise<number>;
 
   // Activity logs (returned newest-first)
   listLogs(limit?: number): Promise<ActivityLog[]>;

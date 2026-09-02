@@ -94,6 +94,20 @@ export interface DocumentVersion {
   createdAt: string;
 }
 
+export type NotificationType = 'Share' | 'Approval Requested' | 'Approval Decided' | 'Comment';
+
+export interface Notification {
+  id: string;
+  userId: string; // recipient
+  type: NotificationType;
+  title: string;
+  body: string;
+  documentId?: string | null; // nulled when the document is purged
+  actorName: string; // who caused it
+  isRead: boolean;
+  createdAt: string;
+}
+
 export type PermissionType = 'Viewer' | 'Commenter' | 'Editor' | 'Approver';
 
 export interface SharePermission {

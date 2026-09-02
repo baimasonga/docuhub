@@ -575,6 +575,53 @@ test('folders can be renamed and moved, but never into their own subtree', async
   assert.equal(byStaff.status, 403, 'Staff must not modify a folder they do not own');
 });
 
+test('in-app notifications reach the recipient and nobody else', async () => {
+  const before = await (await api('staff', 'GET', '/api/notifications')).json();
+  const beforeIds = new Set(before.notifications.map((n: any) => n.id));
+
+  const share = await api('admin', 'POST', `/api/documents/${docId}/share`, {
+    targetUserId: staffId, permissionType: 'Viewer'
+  });
+  assert.equal(share.status, 200);
+
+  const after = await (await api('staff', 'GET', '/api/notifications')).json();
+  const fresh = after.notifications.filter((n: any) => !beforeIds.has(n.id));
+  assert.equal(fresh.length, 1, 'the share queues exactly one notification');
+  assert.equal(fresh[0].type, 'Share');
+  assert.equal(fresh[0].documentId, docId);
+  assert.equal(fresh[0].isRead, false);
+  assert.ok(after.unreadCount >= 1);
+
+  const adminList = await (await api('admin', 'GET', '/api/notifications')).json();
+  assert.ok(
+    !adminList.notifications.some((n: any) => n.id === fresh[0].id),
+    'the actor is not notified of their own action, and cannot read the recipient\'s notifications'
+  );
+  const foreign = await api('admin', 'POST', `/api/notifications/${fresh[0].id}/read`, {});
+  assert.equal(foreign.status, 404, 'another user cannot mark someone else\'s notification read');
+
+  const read = await api('staff', 'POST', `/api/notifications/${fresh[0].id}/read`, {});
+  assert.equal(read.status, 200);
+  const afterRead = await (await api('staff', 'GET', '/api/notifications')).json();
+  assert.equal(afterRead.notifications.find((n: any) => n.id === fresh[0].id).isRead, true);
+
+  // A second event so read-all has something left to clear.
+  const beforeUpgrade = (await (await api('staff', 'GET', '/api/notifications')).json()).unreadCount;
+  const upgraded = await api('admin', 'POST', `/api/documents/${docId}/share`, {
+    targetUserId: staffId, permissionType: 'Commenter'
+  });
+  assert.equal(upgraded.status, 200);
+  assert.equal(
+    (await (await api('staff', 'GET', '/api/notifications')).json()).unreadCount, beforeUpgrade + 1,
+    'each share queues its own notification'
+  );
+
+  const readAll = await api('staff', 'POST', '/api/notifications/read-all', {});
+  assert.equal(readAll.status, 200);
+  const cleared = await (await api('staff', 'GET', '/api/notifications')).json();
+  assert.equal(cleared.unreadCount, 0, 'read-all clears the badge');
+});
+
 test('admin reset issues a fresh temp password and invalidates the old one', async () => {
   const res = await api('admin', 'POST', `/api/users/${staffId}/reset-password`, {});
   assert.equal(res.status, 200);

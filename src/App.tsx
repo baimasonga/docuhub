@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { 
+  Bell,
   Folder, 
   FolderPlus, 
   File, 
@@ -68,7 +69,8 @@ import {
   ExternalShareLink,
   DashboardStats,
   Institution,
-  BackupRun
+  BackupRun,
+  Notification as AppNotification
 } from './types';
 import Sidebar from './components/Sidebar';
 import { LoginScreen, ResetPasswordScreen, ChangePasswordModal } from './components/Auth';
@@ -233,6 +235,8 @@ export default function App() {
   const [showSharedWith, setShowSharedWith] = useState(false);
   // Days a soft-deleted document stays recoverable; 0 means Trash never expires.
   const [trashRetentionDays, setTrashRetentionDays] = useState(0);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [notifMenuOpen, setNotifMenuOpen] = useState(false);
 
   // Modals visibility triggers
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -439,6 +443,42 @@ export default function App() {
     setSelectedIds(new Set());
     setOpenMenuId(null);
   }, [currentView, currentFolderId]);
+
+  const loadNotifications = () => {
+    if (!currentUser) return;
+    fetch('/api/notifications')
+      .then(res => res.json())
+      .then(data => { if (Array.isArray(data.notifications)) setNotifications(data.notifications); })
+      .catch(() => undefined);
+  };
+
+  // Poll rather than push: there is no socket layer, and a minute of latency is
+  // fine for approvals and shares.
+  useEffect(() => {
+    if (!currentUser) { setNotifications([]); return; }
+    loadNotifications();
+    const timer = setInterval(loadNotifications, 60000);
+    return () => clearInterval(timer);
+  }, [currentUser]);
+
+  const unreadNotifications = notifications.filter(n => !n.isRead).length;
+
+  const openNotification = (notification: AppNotification) => {
+    setNotifMenuOpen(false);
+    if (!notification.isRead) {
+      setNotifications(prev => prev.map(n => (n.id === notification.id ? { ...n, isRead: true } : n)));
+      fetch(`/api/notifications/${notification.id}/read`, { method: 'POST' })
+        .catch(() => loadNotifications());
+    }
+    if (notification.documentId) setSelectedDocId(notification.documentId);
+  };
+
+  const markAllNotificationsRead = () => {
+    if (unreadNotifications === 0) return;
+    setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+    fetch('/api/notifications/read-all', { method: 'POST' })
+      .catch(() => loadNotifications());
+  };
 
   // Load the institution profile once authenticated (drives auto-filing UI).
   useEffect(() => {
@@ -1656,6 +1696,67 @@ export default function App() {
             </select>
 
             <span className="text-slate-300 w-px h-5">|</span>
+
+            {/* Notifications */}
+            <div className="relative">
+              <button
+                onClick={() => setNotifMenuOpen(o => !o)}
+                className="relative p-2 rounded-xl text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-all"
+                title="Notifications"
+                aria-label={unreadNotifications > 0 ? `Notifications (${unreadNotifications} unread)` : 'Notifications'}
+              >
+                <Bell className="w-4 h-4" />
+                {unreadNotifications > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 rounded-full bg-rose-500 text-white text-[9px] font-bold flex items-center justify-center">
+                    {unreadNotifications > 9 ? '9+' : unreadNotifications}
+                  </span>
+                )}
+              </button>
+              {notifMenuOpen && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setNotifMenuOpen(false)} />
+                  <div className="absolute right-0 top-full mt-1.5 w-80 bg-white border border-slate-100 rounded-xl shadow-xl z-40 overflow-hidden text-xs">
+                    <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-50 bg-slate-50/50">
+                      <p className="font-bold text-slate-800">Notifications</p>
+                      {unreadNotifications > 0 && (
+                        <button
+                          onClick={markAllNotificationsRead}
+                          className="text-[10px] font-bold text-indigo-600 hover:underline"
+                        >
+                          Mark all read
+                        </button>
+                      )}
+                    </div>
+                    <div className="max-h-80 overflow-y-auto divide-y divide-slate-50">
+                      {notifications.length === 0 && (
+                        <p className="px-4 py-6 text-center text-[11px] text-slate-400">Nothing new right now.</p>
+                      )}
+                      {notifications.map(n => (
+                        <button
+                          key={n.id}
+                          onClick={() => openNotification(n)}
+                          className={`w-full text-left px-4 py-2.5 hover:bg-slate-50 transition-colors ${n.isRead ? '' : 'bg-indigo-50/40'}`}
+                        >
+                          <div className="flex items-start gap-2">
+                            {!n.isRead && <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0" />}
+                            <div className={`min-w-0 flex-1 ${n.isRead ? 'pl-3.5' : ''}`}>
+                              <p className={`text-[11px] leading-snug ${n.isRead ? 'text-slate-600' : 'font-bold text-slate-800'}`}>
+                                {n.title}
+                              </p>
+                              {n.body && <p className="text-[10px] text-slate-400 mt-0.5 line-clamp-2">{n.body}</p>}
+                              <p className="text-[9px] text-slate-300 mt-1">
+                                {new Date(n.createdAt).toLocaleString()}
+                                {!n.documentId && ' · document no longer available'}
+                              </p>
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
 
             {/* Account menu */}
             <div className="relative">

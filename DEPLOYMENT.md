@@ -206,6 +206,10 @@ Sign in locally with the seeded admin and the value of
   per-process login rate limiter.
 - **Email**: transactional notifications (invite, approval requested/decided,
   document shared, password reset) via Resend; best-effort with timeouts.
+- **In-app notifications**: shares, approval requests, approval decisions and
+  comments queue a notification for the recipient, read from the bell in the
+  header (polled once a minute). Independent of Resend, so an institution
+  running without `RESEND_API_KEY` still gets told when something needs them.
 - **Trash retention**: a soft delete records `deleted_at`; the nightly Cron
   Trigger purges anything past `TRASH_RETENTION_DAYS` (default 30) together
   with the Storage objects only it referenced, after the backup step so a
