@@ -66,6 +66,12 @@ SUPABASE_URL = "https://vwpibqvwzvqccoqceumv.supabase.co"
 # Admin-created accounts must use this domain; enforced in sanitizeUserPayload()
 # in server.ts. Not a secret -- just a policy value.
 ALLOWED_EMAIL_DOMAIN = "avdp.org.sl"
+# Trash auto-purge is switched off for now: documents stay in Trash until an
+# Admin purges them by hand. Set this to "30" (or any positive number of days)
+# once the existing Trash has been reviewed -- the first nightly run after that
+# removes everything already past the window, dated from migration 0007's
+# backfill, so review before switching it on rather than after.
+TRASH_RETENTION_DAYS = "0"
 
 # `body-parser` pulls in iconv-lite, whose dynamic `require('streams')` breaks
 # under the Workers nodejs_compat shim. Swap it for a TextDecoder-backed stub
