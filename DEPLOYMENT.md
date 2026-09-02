@@ -108,7 +108,7 @@ observability, and a 30-second CPU safety ceiling).
 3. In **Workers & Pages**, import `baimasonga/docuhub` as a Worker project and
    select the `main` production branch.
 4. Use repository root `/`, build command `npm ci && npm run build:pages`, and
-   deploy command `npx wrangler deploy`.
+   deploy command `npx --yes wrangler@4.128.0 deploy`.
 5. Add the required secrets under the Worker's **Settings → Variables and
    Secrets**. Keep the existing non-secret values from `wrangler.toml`.
 6. Confirm `avdpdocs.org` appears under the Worker's custom domains. The
