@@ -14,6 +14,13 @@ cpu_ms = 30_000
 [observability]
 enabled = true
 head_sampling_rate = 1
+
+# Always create the Vite asset directory before Wrangler validates or deploys.
+# This makes Cloudflare Builds safe even when no separate dashboard build
+# command is configured.
+[build]
+command = "npm run build:pages"
+
 # This is the critical part for custom domains:
 [[routes]]
 pattern = "avdpdocs.org"
