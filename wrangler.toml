@@ -2,7 +2,7 @@ name = "docuhub"
 main = "worker/index.ts"
 compatibility_date = "2026-06-16"
 compatibility_flags = ["nodejs_compat"]
-workers_dev = false
+workers_dev = true
 preview_urls = false
 
 # DocuHub performs password hashing and document metadata processing in the
@@ -20,11 +20,6 @@ head_sampling_rate = 1
 # command is configured.
 [build]
 command = "npm run build:pages"
-
-# This is the critical part for custom domains:
-[[routes]]
-pattern = "avdpdocs.org"
-custom_domain = true
 
 # Static SPA assets built by `npm run build` (vite -> dist-pages). NOT
 # ./public -- that directory only holds raw pre-build files (logo, icons)
@@ -55,6 +50,9 @@ crons = ["0 2 * * *"]
 
 [vars]
 NODE_ENV = "production"
+# Temporary value until the first workers.dev deployment reveals the account
+# subdomain. Replace this with the exact https://docuhub.<account>.workers.dev
+# URL in a follow-up deployment before production login testing.
 APP_URL = "https://avdpdocs.org"
 # The project URL is public information (it's visible to every client);
 # only the service-role key must stay a secret.
