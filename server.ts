@@ -396,7 +396,7 @@ async function canCommentDocument(user: Pick<User, 'id' | 'role' | 'institutionI
   return user.role === 'Admin' || user.role === 'Manager' || mayComment;
 }
 
-function canDeleteFolder(user: Pick<User, 'id' | 'role' | 'institutionId'>, folder: Folder): boolean {
+function canManageFolder(user: Pick<User, 'id' | 'role' | 'institutionId'>, folder: Folder): boolean {
   return user.institutionId === folder.institutionId && (user.role === 'Admin' || user.role === 'Manager' || folder.ownerId === user.id);
 }
 
@@ -1484,13 +1484,75 @@ app.post('/api/folders', h(async (req, res) => {
   res.status(201).json(newFolder);
 }));
 
+// Rename a folder and/or move it under a different parent. Either field may be
+// sent on its own; `parentFolderId: null` moves the folder back to the root.
+app.patch('/api/folders/:id', h(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+
+  const folder = await db().getFolder(req.params.id);
+  if (!folder || folder.institutionId !== user.institutionId) {
+    return res.status(404).json({ error: 'Folder not found.' });
+  }
+  if (!canManageFolder(user, folder)) {
+    return res.status(403).json({ error: 'You do not have permission to modify this folder.' });
+  }
+
+  const { name, parentFolderId } = req.body ?? {};
+  const renaming = name !== undefined;
+  const moving = parentFolderId !== undefined;
+  if (!renaming && !moving) {
+    return res.status(400).json({ error: 'Provide a new name, a new parent folder, or both.' });
+  }
+
+  const patch: Partial<Folder> = {};
+
+  if (renaming) {
+    const trimmed = String(name).trim();
+    if (!trimmed) return res.status(400).json({ error: 'Folder name is required.' });
+    if (trimmed.length > 120) return res.status(400).json({ error: 'Folder name must be 120 characters or fewer.' });
+    patch.name = trimmed;
+  }
+
+  if (moving) {
+    const targetId = parentFolderId === null || parentFolderId === '' ? null : String(parentFolderId);
+    if (targetId) {
+      const parent = await db().getFolder(targetId);
+      if (!parent || parent.institutionId !== user.institutionId) {
+        return res.status(400).json({ error: 'Destination folder is invalid.' });
+      }
+      // A folder cannot be moved into itself or into one of its own
+      // descendants -- that would detach the whole subtree from the root.
+      const institutionFolders = (await db().listFolders()).filter(f => f.institutionId === user.institutionId);
+      if (collectFolderTreeIds(institutionFolders, folder.id).includes(targetId)) {
+        return res.status(400).json({ error: 'A folder cannot be moved inside itself.' });
+      }
+    }
+    patch.parentFolderId = targetId;
+  }
+
+  const updated = await db().updateFolder(folder.id, patch);
+  if (!updated) return res.status(404).json({ error: 'Folder not found.' });
+
+  const changes: string[] = [];
+  if (renaming && patch.name !== folder.name) changes.push(`renamed from "${folder.name}" to "${patch.name}"`);
+  if (moving && patch.parentFolderId !== folder.parentFolderId) {
+    const destination = patch.parentFolderId ? (await db().getFolder(patch.parentFolderId))?.name || 'another folder' : 'the root';
+    changes.push(`moved to ${destination}`);
+  }
+  if (changes.length > 0) {
+    await logActivity(user, 'Rename Folder', undefined, updated.name, `Folder ${changes.join(' and ')}.`);
+  }
+  res.json({ success: true, folder: updated });
+}));
+
 app.delete('/api/folders/:id', h(async (req, res) => {
   const user = await requireUser(req, res);
   if (!user) return;
 
   const folder = await db().getFolder(req.params.id);
   if (!folder) return res.status(404).json({ error: 'Folder not found.' });
-  if (!canDeleteFolder(user, folder)) {
+  if (!canManageFolder(user, folder)) {
     return res.status(403).json({ error: 'You do not have permission to delete this folder.' });
   }
 
@@ -2231,6 +2293,30 @@ app.post('/api/documents/:id/share', h(async (req, res) => {
     DOCUMENT_URL: requestBaseUrl(req),
     CURRENT_YEAR: String(new Date().getFullYear())
   });
+  res.json({ success: true });
+}));
+
+// Revoke one user's internal share. Mirrors the guard on POST .../share, so
+// whoever can grant access can also take it back.
+app.delete('/api/documents/:id/share/:userId', h(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+  const docId = req.params.id;
+
+  const doc = await db().getDocument(docId);
+  if (!doc) return res.status(404).json({ error: 'Document not found.' });
+  if (!(await canEditDocument(user, doc))) {
+    return res.status(403).json({ error: 'You do not have permission to manage sharing for this document.' });
+  }
+
+  const removed = await db().deletePermission(docId, req.params.userId);
+  if (!removed) return res.status(404).json({ error: 'That user does not have shared access to this document.' });
+
+  const targetUser = await db().getUser(req.params.userId);
+  await logActivity(
+    user, 'Revoke Share', docId, doc.title,
+    `Revoked shared access for ${targetUser ? targetUser.fullName : `user ${req.params.userId}`}.`
+  );
   res.json({ success: true });
 }));
 

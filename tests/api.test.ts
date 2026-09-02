@@ -481,6 +481,67 @@ test('password-protected link gates content until the password is supplied', asy
   assert.match(await right.text(), /Total amount due/);
 });
 
+test('an internal share can be revoked', async () => {
+  const share = await api('admin', 'POST', `/api/documents/${docId}/share`, {
+    targetUserId: staffId, permissionType: 'Viewer'
+  });
+  assert.equal(share.status, 200);
+  const before = await (await api('admin', 'GET', `/api/documents/${docId}`)).json();
+  assert.ok(before.permissions.some((p: any) => p.sharedWithUserId === staffId), 'share should be listed on the document');
+  assert.equal((await api('staff', 'GET', `/api/documents/${docId}`)).status, 200);
+
+  const staffRevoke = await api('staff', 'DELETE', `/api/documents/${docId}/share/${staffId}`);
+  assert.equal(staffRevoke.status, 403, 'a Viewer share must not be able to manage sharing');
+
+  const revoke = await api('admin', 'DELETE', `/api/documents/${docId}/share/${staffId}`);
+  assert.equal(revoke.status, 200);
+
+  assert.equal((await api('staff', 'GET', `/api/documents/${docId}`)).status, 403, 'access must end with the share');
+  const after = await (await api('admin', 'GET', `/api/documents/${docId}`)).json();
+  assert.ok(!after.permissions.some((p: any) => p.sharedWithUserId === staffId));
+  const sharedWithMe = await (await api('staff', 'GET', '/api/documents?filterType=shared')).json();
+  assert.ok(!sharedWithMe.some((d: any) => d.id === docId), 'doc must leave Shared with me');
+
+  const again = await api('admin', 'DELETE', `/api/documents/${docId}/share/${staffId}`);
+  assert.equal(again.status, 404, 'revoking a share that no longer exists is a 404');
+});
+
+test('folders can be renamed and moved, but never into their own subtree', async () => {
+  const makeFolder = async (name: string, parentFolderId: string | null = null) => {
+    const res = await api('admin', 'POST', '/api/folders', { name, parentFolderId });
+    assert.equal(res.status, 201);
+    return res.json();
+  };
+  const parent = await makeFolder('Contracts 2026');
+  const child = await makeFolder('Q1', parent.id);
+  const sibling = await makeFolder('Archive Cabinet');
+
+  const renamed = await api('admin', 'PATCH', `/api/folders/${parent.id}`, { name: '  Contracts 2027  ' });
+  assert.equal(renamed.status, 200);
+  assert.equal((await renamed.json()).folder.name, 'Contracts 2027', 'the new name is trimmed');
+
+  assert.equal((await api('admin', 'PATCH', `/api/folders/${parent.id}`, { name: '   ' })).status, 400);
+  assert.equal((await api('admin', 'PATCH', `/api/folders/${parent.id}`, {})).status, 400, 'an empty patch is rejected');
+  assert.equal((await api('admin', 'PATCH', '/api/folders/folder-does-not-exist', { name: 'x' })).status, 404);
+
+  assert.equal(
+    (await api('admin', 'PATCH', `/api/folders/${parent.id}`, { parentFolderId: child.id })).status, 400,
+    'moving a folder into its own descendant would detach the subtree'
+  );
+  assert.equal((await api('admin', 'PATCH', `/api/folders/${parent.id}`, { parentFolderId: parent.id })).status, 400);
+
+  const moved = await api('admin', 'PATCH', `/api/folders/${child.id}`, { parentFolderId: sibling.id });
+  assert.equal(moved.status, 200);
+  assert.equal((await moved.json()).folder.parentFolderId, sibling.id);
+
+  const toRoot = await api('admin', 'PATCH', `/api/folders/${child.id}`, { parentFolderId: null });
+  assert.equal(toRoot.status, 200);
+  assert.equal((await toRoot.json()).folder.parentFolderId, null);
+
+  const byStaff = await api('staff', 'PATCH', `/api/folders/${parent.id}`, { name: 'Hijacked' });
+  assert.equal(byStaff.status, 403, 'Staff must not modify a folder they do not own');
+});
+
 test('admin reset issues a fresh temp password and invalidates the old one', async () => {
   const res = await api('admin', 'POST', `/api/users/${staffId}/reset-password`, {});
   assert.equal(res.status, 200);

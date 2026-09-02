@@ -132,6 +132,23 @@ function getFileFormatInfo(fileType: string, docType?: string, fileName?: string
   return { label: 'FILE', bg: 'bg-slate-100', text: 'text-slate-500', Icon: File };
 }
 
+// Every folder id in `rootId`'s subtree, including `rootId` itself. Used to keep
+// a folder from being moved inside one of its own descendants.
+function collectFolderSubtree(folders: FolderType[], rootId: string): Set<string> {
+  const ids = new Set<string>([rootId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const folder of folders) {
+      if (folder.parentFolderId && ids.has(folder.parentFolderId) && !ids.has(folder.id)) {
+        ids.add(folder.id);
+        changed = true;
+      }
+    }
+  }
+  return ids;
+}
+
 // Icon + color shown next to each entry in a document's File History feed.
 function getActivityIconInfo(action: string): { Icon: React.ElementType; text: string } {
   const a = action.toLowerCase();
@@ -139,6 +156,7 @@ function getActivityIconInfo(action: string): { Icon: React.ElementType; text: s
   if (a.includes('download')) return { Icon: Download, text: 'text-sky-500' };
   if (a.includes('rename')) return { Icon: Pencil, text: 'text-slate-500' };
   if (a.includes('move')) return { Icon: CornerDownRight, text: 'text-amber-500' };
+  if (a.includes('revoke')) return { Icon: X, text: 'text-rose-500' };
   if (a.includes('share') || a.includes('link')) return { Icon: Share2, text: 'text-violet-500' };
   if (a.includes('comment')) return { Icon: Send, text: 'text-slate-500' };
   if (a.includes('approv') && !a.includes('reject')) return { Icon: CheckSquare, text: 'text-emerald-500' };
@@ -212,6 +230,7 @@ export default function App() {
   const [showFileHistory, setShowFileHistory] = useState(false);
   const [showOcrText, setShowOcrText] = useState(false);
   const [showShareLinks, setShowShareLinks] = useState(false);
+  const [showSharedWith, setShowSharedWith] = useState(false);
 
   // Modals visibility triggers
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -273,6 +292,8 @@ export default function App() {
 
   // Move targets
   const [moveTargetFolderId, setMoveTargetFolderId] = useState<string>('root');
+  // When set, the move modal is relocating a folder rather than documents.
+  const [movingFolder, setMovingFolder] = useState<FolderType | null>(null);
 
   // Decision fields (Approve/Reject/Action)
   const [decisionApprovalId, setDecisionApprovalId] = useState<string | null>(null);
@@ -523,6 +544,40 @@ export default function App() {
       }
     })
     .catch(() => triggerToast('Could not create cabinet. Please try again.', 'error'));
+  };
+
+  const patchFolder = (folder: FolderType, patch: { name?: string; parentFolderId?: string | null }, successText: string) =>
+    fetch(`/api/folders/${folder.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch)
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          triggerToast(successText, 'success');
+          reloadData();
+        } else {
+          triggerToast(data.error || 'Could not update folder.', 'error');
+        }
+        return data;
+      })
+      .catch(() => triggerToast('Could not update folder.', 'error'));
+
+  const handleRenameFolder = (folder: FolderType, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!currentUser) return;
+    const name = window.prompt('Rename folder', folder.name);
+    if (name === null) return;
+    if (!name.trim() || name.trim() === folder.name) return;
+    patchFolder(folder, { name: name.trim() }, 'Folder renamed.');
+  };
+
+  const openFolderMove = (folder: FolderType, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setMovingFolder(folder);
+    setMoveTargetFolderId(folder.parentFolderId || 'root');
+    setShowMoveModal(true);
   };
 
   const handleDeleteFolder = (folder: FolderType, e: React.MouseEvent) => {
@@ -950,15 +1005,28 @@ export default function App() {
   const openMoveModal = (docIds: string[], e?: React.MouseEvent) => {
     e?.stopPropagation();
     setMoveIds(docIds);
+    setMovingFolder(null);
     setMoveTargetFolderId('root');
     setShowMoveModal(true);
   };
 
-  const handleMoveDocument = (e: React.FormEvent) => {
+  const closeMoveModal = () => {
+    setShowMoveModal(false);
+    setMovingFolder(null);
+  };
+
+  const handleMoveSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUser || moveIds.length === 0) return;
+    if (!currentUser) return;
 
     const folderId = moveTargetFolderId === 'root' ? null : moveTargetFolderId;
+
+    if (movingFolder) {
+      patchFolder(movingFolder, { parentFolderId: folderId }, 'Folder moved.')
+        .then(() => closeMoveModal());
+      return;
+    }
+    if (moveIds.length === 0) return;
     Promise.all(
       moveIds.map(id =>
         fetch(`/api/documents/${id}/move`, {
@@ -974,7 +1042,7 @@ export default function App() {
       } else {
         triggerToast(moveIds.length > 1 ? `Moved ${moveIds.length} documents.` : 'Document layout paths updated cleanly!', 'success');
       }
-      setShowMoveModal(false);
+      closeMoveModal();
       clearSelection();
       reloadData();
     });
@@ -1296,6 +1364,23 @@ export default function App() {
     });
   };
 
+  const handleRevokeShare = (userId: string, userName: string) => {
+    if (!selectedDocId) return;
+    if (!window.confirm(`Remove ${userName}'s access to this document?`)) return;
+    fetch(`/api/documents/${selectedDocId}/share/${userId}`, { method: 'DELETE' })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          triggerToast(`Access revoked for ${userName}.`, 'success');
+          fetchDocDetail(selectedDocId);
+          reloadData();
+        } else {
+          triggerToast(data.error || 'Could not revoke access.', 'error');
+        }
+      })
+      .catch(() => triggerToast('Could not revoke access.', 'error'));
+  };
+
   // Utility calculations for breadcrumb navigation
   const getBreadcrumbs = () => {
     const list = [{ id: 'root', name: 'Folder Cabinets' }];
@@ -1319,6 +1404,13 @@ export default function App() {
   const selectedDocs = documents.filter(doc => selectedIds.has(doc.id));
   const singleSelectedDoc = selectedDocs.length === 1 ? selectedDocs[0] : null;
   const selectionMenuOpen = openMenuId === '__selection-toolbar';
+  // Conservative mirror of the server's canEditDocument() guard on the unshare
+  // route -- the server is still the authority, this only hides a dead button.
+  const canManageSharing = !!currentUser && !!docDetail && (
+    currentUser.role === 'Admin' ||
+    currentUser.role === 'Manager' ||
+    docDetail.document.ownerId === currentUser.id
+  );
 
   // ---- Auth gates (all hooks are declared above; safe to return early) ----
   const resetToken = typeof window !== 'undefined' && window.location.pathname === '/reset-password'
@@ -1856,7 +1948,7 @@ export default function App() {
                         <div className="w-8 h-8 rounded-lg bg-indigo-50/70 flex items-center justify-center text-indigo-600 group-hover:bg-indigo-100/70 transition-all">
                           <Folder className="w-4 h-4" />
                         </div>
-                        <div className="min-w-0 pr-6">
+                        <div className="min-w-0 pr-16">
                           <h4 className="text-xs font-bold text-slate-700 truncate group-hover:text-indigo-600">{fold.name}</h4>
                           {fold.department && (
                             <span className="text-[8px] font-mono px-1 py-0.2 bg-slate-100 text-slate-500 rounded block mt-0.5 truncate uppercase">
@@ -1865,14 +1957,32 @@ export default function App() {
                           )}
                         </div>
                         {currentUser.role !== 'Viewer' && (
-                          <button
-                            type="button"
-                            onClick={(e) => handleDeleteFolder(fold, e)}
-                            title="Delete folder"
-                            className="absolute right-2 top-2 rounded-md p-1 text-slate-300 opacity-0 transition-all hover:bg-rose-50 hover:text-rose-500 group-hover:opacity-100 focus:opacity-100"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          <div className="absolute right-1.5 top-1.5 flex items-center opacity-0 transition-all group-hover:opacity-100 focus-within:opacity-100">
+                            <button
+                              type="button"
+                              onClick={(e) => handleRenameFolder(fold, e)}
+                              title="Rename folder"
+                              className="rounded-md p-1 text-slate-300 hover:bg-indigo-50 hover:text-indigo-500"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => openFolderMove(fold, e)}
+                              title="Move folder"
+                              className="rounded-md p-1 text-slate-300 hover:bg-amber-50 hover:text-amber-600"
+                            >
+                              <CornerDownRight className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => handleDeleteFolder(fold, e)}
+                              title="Delete folder"
+                              className="rounded-md p-1 text-slate-300 hover:bg-rose-50 hover:text-rose-500"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         )}
                       </div>
                     ))}
@@ -2621,6 +2731,57 @@ export default function App() {
                 default like Extracted Text / File History below -- with several
                 links active this was previously rendering a full detail card per
                 link at all times, dominating the panel. */}
+            {/* Who inside the institution this document is shared with */}
+            {docDetail.permissions.length > 0 && (
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={() => setShowSharedWith(s => !s)}
+                  className="w-full flex justify-between items-center"
+                >
+                  <span className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase flex items-center space-x-1.5">
+                    <Share2 className="w-3 h-3 text-slate-400" />
+                    <span>Shared With</span>
+                    <span className="text-slate-300 normal-case font-sans">({docDetail.permissions.length})</span>
+                  </span>
+                  <ChevronRight className={`w-3.5 h-3.5 text-slate-400 transition-transform shrink-0 ${showSharedWith ? 'rotate-90' : ''}`} />
+                </button>
+
+                {showSharedWith && (
+                  <div className="bg-violet-50/40 border border-violet-100 rounded-xl p-2 space-y-1.5">
+                    {docDetail.permissions.map(perm => {
+                      const recipient = users.find(u => u.id === perm.sharedWithUserId);
+                      const recipientName = recipient?.fullName || 'Inactive or removed user';
+                      return (
+                        <div
+                          key={perm.id}
+                          className="flex items-center justify-between gap-2 px-2.5 py-2 bg-white rounded-lg border border-slate-100"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[10px] font-semibold text-slate-700 truncate" title={recipient?.email}>
+                              {recipientName}
+                            </p>
+                            <p className="text-[8px] text-slate-400 mt-0.5">
+                              {perm.permissionType} · shared {new Date(perm.createdAt).toLocaleDateString()}
+                            </p>
+                          </div>
+                          {canManageSharing && (
+                            <button
+                              onClick={() => handleRevokeShare(perm.sharedWithUserId, recipientName)}
+                              title="Revoke access"
+                              className="shrink-0 p-1.5 bg-rose-50 text-rose-600 hover:bg-rose-100 rounded-lg"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
             {docDetail.externalLinks && docDetail.externalLinks.length > 0 && (
               <div className="space-y-2">
                 <button
@@ -3286,13 +3447,15 @@ export default function App() {
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs">
           <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 mx-4">
             <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
-              <h3 className="font-display font-extrabold text-slate-800 text-sm">Move Folder Destination</h3>
-              <button onClick={() => setShowMoveModal(false)} className="p-1 hover:bg-slate-100 rounded">
+              <h3 className="font-display font-extrabold text-slate-800 text-sm">
+                {movingFolder ? `Move Folder "${movingFolder.name}"` : 'Move Folder Destination'}
+              </h3>
+              <button onClick={closeMoveModal} className="p-1 hover:bg-slate-100 rounded">
                 <X className="w-4 h-4 text-slate-400" />
               </button>
             </div>
 
-            <form onSubmit={handleMoveDocument} className="space-y-4 text-xs font-medium text-slate-600">
+            <form onSubmit={handleMoveSubmit} className="space-y-4 text-xs font-medium text-slate-600">
               <div className="space-y-1.5">
                 <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">Target Directory Destination</label>
                 <select
@@ -3301,11 +3464,13 @@ export default function App() {
                   className="w-full bg-slate-50 border border-slate-150 rounded-xl p-2 px-3 text-xs outline-none"
                 >
                   <option value="root">Folder Cabinets / Root</option>
-                  {folders.map(f => (
-                    <option key={f.id} value={f.id}>
-                      {f.name} ({f.department || 'GLOBAL'})
-                    </option>
-                  ))}
+                  {folders
+                    .filter(f => !movingFolder || !collectFolderSubtree(folders, movingFolder.id).has(f.id))
+                    .map(f => (
+                      <option key={f.id} value={f.id}>
+                        {f.name} ({f.department || 'GLOBAL'})
+                      </option>
+                    ))}
                 </select>
               </div>
 
@@ -3313,7 +3478,7 @@ export default function App() {
                 type="submit"
                 className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-extrabold shadow-sm shadow-indigo-100 transition-all"
               >
-                Move Document
+                {movingFolder ? 'Move Folder' : 'Move Document'}
               </button>
             </form>
           </div>

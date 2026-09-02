@@ -80,6 +80,7 @@ export interface DataStore {
   listFolders(): Promise<Folder[]>;
   getFolder(id: string): Promise<Folder | null>;
   createFolder(f: Folder): Promise<Folder>;
+  updateFolder(id: string, patch: Partial<Folder>): Promise<Folder | null>;
   deleteFolders(ids: string[]): Promise<void>;
 
   // Documents
@@ -109,6 +110,8 @@ export interface DataStore {
   listPermissionsForDocument(documentId: string): Promise<SharePermission[]>;
   listPermissionsForUser(userId: string): Promise<SharePermission[]>;
   upsertPermission(p: SharePermission): Promise<void>;
+  /** Revoke one user's access to one document. Resolves false when no share existed. */
+  deletePermission(documentId: string, sharedWithUserId: string): Promise<boolean>;
   listAllPermissions(): Promise<SharePermission[]>;
 
   // Approvals

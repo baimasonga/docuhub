@@ -326,6 +326,11 @@ export class SupabaseStore implements DataStore {
     SupabaseStore.unwrap(await this.from('folders').insert(folderToRow(f)).select().single(), 'createFolder');
     return f;
   }
+  async updateFolder(id: string, patch: Partial<Folder>) {
+    const data = SupabaseStore.unwrap(
+      await this.from('folders').update(folderToRow(patch)).eq('id', id).select('*').maybeSingle(), 'updateFolder');
+    return data ? folderFromRow(data as Row) : null;
+  }
   async deleteFolders(ids: string[]) {
     if (ids.length === 0) return;
     SupabaseStore.unwrap(await this.from('folders').delete().in('id', ids).select('id'), 'deleteFolders');
@@ -491,6 +496,13 @@ export class SupabaseStore implements DataStore {
     SupabaseStore.unwrap(
       await this.from('share_permissions').upsert(permissionToRow(p), { onConflict: 'document_id,shared_with_user_id' }).select('id'),
       'upsertPermission');
+  }
+  async deletePermission(documentId: string, sharedWithUserId: string) {
+    const data = SupabaseStore.unwrap(
+      await this.from('share_permissions').delete()
+        .eq('document_id', documentId).eq('shared_with_user_id', sharedWithUserId).select('id'),
+      'deletePermission');
+    return (data as Row[]).length > 0;
   }
   async listAllPermissions() {
     const data = SupabaseStore.unwrap(await this.from('share_permissions').select('*'), 'listAllPermissions');

@@ -129,6 +129,13 @@ export class MemoryStore implements DataStore {
   async listFolders() { return [...this.db.folders]; }
   async getFolder(id: string) { return this.db.folders.find(f => f.id === id) || null; }
   async createFolder(f: Folder) { this.db.folders.push(f); this.flush(); return f; }
+  async updateFolder(id: string, patch: Partial<Folder>) {
+    const folder = this.db.folders.find(f => f.id === id);
+    if (!folder) return null;
+    Object.assign(folder, patch);
+    this.flush();
+    return { ...folder };
+  }
   async deleteFolders(ids: string[]) {
     const set = new Set(ids);
     this.db.folders = this.db.folders.filter(f => !set.has(f.id));
@@ -231,6 +238,15 @@ export class MemoryStore implements DataStore {
       this.db.permissions.push(p);
     }
     this.flush();
+  }
+  async deletePermission(documentId: string, sharedWithUserId: string) {
+    const before = this.db.permissions.length;
+    this.db.permissions = this.db.permissions.filter(
+      p => !(p.documentId === documentId && p.sharedWithUserId === sharedWithUserId)
+    );
+    if (this.db.permissions.length === before) return false;
+    this.flush();
+    return true;
   }
   async listAllPermissions() { return this.db.permissions.map(p => ({ ...p })); }
 
