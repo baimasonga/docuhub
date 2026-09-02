@@ -12,7 +12,7 @@ import express from 'express';
 // ---- Password hashing ----------------------------------------------------
 // PBKDF2-SHA256. Iterations are a balance between OWASP guidance and the CPU
 // budget of a Cloudflare Workers request (login is the only hot path).
-const PBKDF2_ITERATIONS = 100_000;
+const PBKDF2_ITERATIONS = 310_000;
 const PBKDF2_KEYLEN = 32;
 
 export function hashPassword(password: string): string {
@@ -55,10 +55,9 @@ export function sha256Hex(input: string): string {
 }
 
 // ---- Stateless HMAC session cookies ---------------------------------------
-// The signing secret defaults to the Supabase service-role key (already a
-// stable server-side secret) so it works with zero extra config; set
-// SESSION_SECRET to rotate/override. Resolved lazily: on Workers, env vars
-// are only populated inside a request context.
+// Production startup requires an independent SESSION_SECRET. The legacy
+// fallbacks below remain only for local development compatibility. Resolved
+// lazily because Workers exposes bindings inside a request context.
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const SESSION_COOKIE = 'sid';
 
@@ -119,14 +118,29 @@ export function sessionTokenFromRequest(req: express.Request): string | null {
 }
 
 function isSecureRequest(req: express.Request): boolean {
-  return req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
+  return process.env.NODE_ENV === 'production' || req.secure || String(req.headers['x-forwarded-proto'] || '').includes('https');
 }
 
-export function setSessionCookie(req: express.Request, res: express.Response, userId: string): void {
-  const token = signSession(userId, Date.now() + SESSION_TTL_MS);
+export function setSessionCookie(req: express.Request, res: express.Response, userId: string, sessionVersion = 0): void {
+  const encodedUserId = Buffer.from(userId, 'utf8').toString('base64url');
+  const token = signSession(`user:${encodedUserId}:${sessionVersion}`, Date.now() + SESSION_TTL_MS);
   const secure = isSecureRequest(req) ? '; Secure' : '';
   res.setHeader('Set-Cookie',
     `${SESSION_COOKIE}=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${SESSION_TTL_MS / 1000}${secure}`);
+}
+
+export function setSignedCookie(
+  req: express.Request,
+  res: express.Response,
+  name: string,
+  subject: string,
+  ttlMs: number,
+  sameSite: 'Lax' | 'Strict' = 'Strict'
+): void {
+  const token = signSession(subject, Date.now() + ttlMs);
+  const secure = isSecureRequest(req) ? '; Secure' : '';
+  res.appendHeader('Set-Cookie',
+    `${name}=${token}; HttpOnly; Path=/; SameSite=${sameSite}; Max-Age=${Math.floor(ttlMs / 1000)}${secure}`);
 }
 
 export function clearSessionCookie(req: express.Request, res: express.Response): void {

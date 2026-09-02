@@ -35,8 +35,8 @@ import { MemoryStore } from './server/store-memory';
 import { SupabaseStore } from './server/store-supabase';
 import {
   hashPassword, verifyPassword, validatePasswordStrength, generateTempPassword, sha256Hex,
-  signSession, verifySession, sessionTokenFromRequest, setSessionCookie, clearSessionCookie,
-  loginRateLimited, clearLoginAttempts
+  signSession, verifySession, parseCookies, sessionTokenFromRequest, setSessionCookie, clearSessionCookie,
+  setSignedCookie, loginRateLimited, clearLoginAttempts
 } from './server/auth';
 import {
   sendEmail, sendTemplatedEmail, inviteEmail, passwordResetEmail, tempPasswordEmail,
@@ -64,6 +64,40 @@ const isWorkersRuntime = typeof (globalThis as any).WebSocketPair !== 'undefined
 // Body parser
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Permissions-Policy', 'camera=(self), microphone=(), geolocation=()');
+  if (req.path.startsWith('/api/') || req.path.startsWith('/s/')) res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    "connect-src 'self' https://*.supabase.co",
+    "frame-src 'self' https://*.supabase.co blob:",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'self'"
+  ].join('; '));
+  next();
+});
+app.use((req, res, next) => {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
+  const origin = req.headers.origin;
+  if (!origin) return next();
+  try {
+    const expected = new URL(process.env.APP_URL || `${req.protocol}://${req.headers.host}`).origin;
+    if (new URL(origin).origin !== expected) return res.status(403).json({ error: 'Cross-origin request rejected.' });
+  } catch {
+    return res.status(403).json({ error: 'Invalid request origin.' });
+  }
+  next();
+});
 
 // ----------------------------------------------------
 // Persistence backend selection
@@ -94,6 +128,16 @@ function resolveDataDir(): string {
 }
 
 function createStoreFromEnv(): DataStore {
+  if (process.env.NODE_ENV === 'production') {
+    if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
+      throw new Error('SESSION_SECRET (at least 32 characters) is required in production.');
+    }
+    try {
+      if (!process.env.APP_URL || new URL(process.env.APP_URL).protocol !== 'https:') throw new Error();
+    } catch {
+      throw new Error('APP_URL must be a valid HTTPS URL in production.');
+    }
+  }
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
   if (url && key) {
@@ -101,6 +145,9 @@ function createStoreFromEnv(): DataStore {
     storageEnabled = true;
     console.log('[startup] Persistence backend: Supabase (relational tables)');
     return new SupabaseStore(supabase);
+  }
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required in production. Refusing non-durable fallback.');
   }
   storageEnabled = false;
   const filePath = isWorkersRuntime ? null : path.join(resolveDataDir(), 'db.json');
@@ -153,36 +200,22 @@ function safeObjectName(fileName: string): string {
   return fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
-// Tracks which user a signed direct-upload path (/api/uploads/sign) was
-// actually issued to. Without this, any client-supplied `storagePath` on
-// /api/documents/scan|upload|:id/version would be trusted verbatim — and
-// storagePath is echoed back in every document/version response to anyone
-// who can view that doc, so a user could point their own document at another
-// user's (or a revoked share's) storage object and read its bytes forever.
-// Per-process only (like the login rate limiter in server/auth.ts) — on
-// Workers each isolate tracks its own window, which is fine since the signed
-// URL itself is short-lived and this is just an extra ownership check on it.
-const pendingUploads = new Map<string, { userId: string; expiresAt: number }>();
+function safeDownloadName(fileName: string): string {
+  return String(fileName || 'document').replace(/[\u0000-\u001f\u007f"\\]/g, '_').slice(0, 240);
+}
+
 const PENDING_UPLOAD_TTL_MS = 15 * 60 * 1000;
 
-function registerPendingUpload(objectPath: string, userId: string): void {
-  pendingUploads.set(objectPath, { userId, expiresAt: Date.now() + PENDING_UPLOAD_TTL_MS });
+function uploadClaimSubject(objectPath: string, userId: string): string {
+  return `upload:${userId}:${sha256Hex(objectPath)}`;
 }
 
-// Non-consuming check — used by /scan, which previews the same storagePath
-// that a later /upload or /version call will still need to claim.
-function isPendingUploadOwnedBy(objectPath: string, userId: string): boolean {
-  const entry = pendingUploads.get(objectPath);
-  return Boolean(entry && entry.userId === userId && Date.now() <= entry.expiresAt);
+function issueUploadClaim(objectPath: string, userId: string): string {
+  return signSession(uploadClaimSubject(objectPath, userId), Date.now() + PENDING_UPLOAD_TTL_MS);
 }
 
-// Consuming check — used wherever a storagePath is actually persisted onto a
-// document/version, so the same signed path can't be replayed onto a second
-// document once it's been used for one.
-function claimPendingUpload(objectPath: string, userId: string): boolean {
-  if (!isPendingUploadOwnedBy(objectPath, userId)) return false;
-  pendingUploads.delete(objectPath);
-  return true;
+function verifyUploadClaim(objectPath: string, userId: string, claim: unknown): boolean {
+  return typeof claim === 'string' && verifySession(claim) === uploadClaimSubject(objectPath, userId);
 }
 
 async function uploadVersionFile(docId: string, versionId: string, fileName: string, buffer: Buffer, contentType: string): Promise<string | null> {
@@ -194,6 +227,14 @@ async function uploadVersionFile(docId: string, versionId: string, fileName: str
     return null;
   }
   return objectPath;
+}
+
+async function copyStoredVersionFile(sourcePath: string, docId: string, versionId: string, fileName: string): Promise<string> {
+  if (!storageEnabled || !supabase) throw new Error('Object storage is unavailable.');
+  const destination = `${docId}/${versionId}/${safeObjectName(fileName)}`;
+  const { error } = await supabase.storage.from(STORAGE_BUCKET).copy(sourcePath, destination);
+  if (error) throw new Error(`Storage copy failed: ${error.message}`);
+  return destination;
 }
 
 async function signedUrlFor(objectPath: string, opts: { download?: string | boolean } = {}): Promise<string | null> {
@@ -267,16 +308,33 @@ async function migrateFilesToStorage(): Promise<void> {
 async function getUserFromRequest(req: express.Request): Promise<StoredUser | null> {
   const token = sessionTokenFromRequest(req);
   if (!token) return null;
-  const userId = verifySession(token);
-  if (!userId) return null;
+  const subject = verifySession(token);
+  if (!subject) return null;
+  let userId: string;
+  let tokenVersion: number;
+  if (subject.startsWith('user:')) {
+    const parts = subject.split(':');
+    if (parts.length !== 3) return null;
+    try { userId = Buffer.from(parts[1], 'base64url').toString('utf8'); } catch { return null; }
+    tokenVersion = Number(parts[2]);
+  } else {
+    // One-release compatibility for sessions issued before session versioning.
+    userId = subject;
+    tokenVersion = 0;
+  }
+  if (!Number.isInteger(tokenVersion) || tokenVersion < 0) return null;
   const user = await db().getUser(userId);
-  return user && user.isActive ? user : null;
+  return user && user.isActive && (user.sessionVersion || 0) === tokenVersion ? user : null;
 }
 
-async function requireUser(req: express.Request, res: express.Response): Promise<StoredUser | null> {
+async function requireUser(req: express.Request, res: express.Response, allowPasswordChange = false): Promise<StoredUser | null> {
   const user = await getUserFromRequest(req);
   if (!user) {
     res.status(401).json({ error: 'Not authenticated.' });
+    return null;
+  }
+  if (user.mustChangePassword && !allowPasswordChange) {
+    res.status(403).json({ error: 'Password change required.', code: 'PASSWORD_CHANGE_REQUIRED' });
     return null;
   }
   return user;
@@ -292,33 +350,46 @@ async function requireAdmin(req: express.Request, res: express.Response): Promis
   return user;
 }
 
-type Viewer = Pick<User, 'id' | 'role' | 'department'>;
+type Viewer = Pick<User, 'id' | 'role' | 'department' | 'institutionId'>;
 
 function canViewWithShares(user: Viewer, doc: Document, sharedDocIds: Set<string>): boolean {
-  if (user.role === 'Admin' || user.role === 'Manager' || user.role === 'Auditor') return true;
+  if (!user.institutionId || user.institutionId !== doc.institutionId) return false;
   if (doc.ownerId === user.id) return true;
   const shared = sharedDocIds.has(doc.id);
+  if (doc.confidentialityLevel === 'Confidential') return user.role === 'Admin' || shared;
+  if (user.role === 'Admin' || user.role === 'Manager' || user.role === 'Auditor') return true;
   if (user.role === 'Staff') return shared || doc.department === user.department;
   if (user.role === 'Viewer') return shared || (doc.department === user.department && doc.status === 'Approved');
   return false;
 }
 
 async function canViewDocument(user: Viewer, doc: Document): Promise<boolean> {
-  if (user.role === 'Admin' || user.role === 'Manager' || user.role === 'Auditor') return true;
-  if (doc.ownerId === user.id) return true;
   const perms = await db().listPermissionsForDocument(doc.id);
   return canViewWithShares(user, doc, new Set(perms.filter(p => p.sharedWithUserId === user.id).map(p => p.documentId)));
 }
 
-async function canEditDocument(user: Pick<User, 'id' | 'role'>, doc: Document): Promise<boolean> {
-  if (user.role === 'Admin' || user.role === 'Manager') return true;
+async function canEditDocument(user: Pick<User, 'id' | 'role' | 'institutionId'>, doc: Document): Promise<boolean> {
+  if (!user.institutionId || user.institutionId !== doc.institutionId) return false;
   if (doc.ownerId === user.id) return true;
   const perms = await db().listPermissionsForDocument(doc.id);
-  return perms.some(p => p.sharedWithUserId === user.id && p.permissionType === 'Editor');
+  const editor = perms.some(p => p.sharedWithUserId === user.id && p.permissionType === 'Editor');
+  if (doc.confidentialityLevel === 'Confidential') return user.role === 'Admin' || editor;
+  return user.role === 'Admin' || user.role === 'Manager' || editor;
 }
 
-function canDeleteFolder(user: Pick<User, 'id' | 'role'>, folder: Folder): boolean {
-  return user.role === 'Admin' || user.role === 'Manager' || folder.ownerId === user.id;
+async function canCommentDocument(user: Pick<User, 'id' | 'role' | 'institutionId'>, doc: Document): Promise<boolean> {
+  if (!user.institutionId || user.institutionId !== doc.institutionId) return false;
+  if (doc.ownerId === user.id) return true;
+  const perms = await db().listPermissionsForDocument(doc.id);
+  const mayComment = perms.some(p =>
+    p.sharedWithUserId === user.id && (p.permissionType === 'Commenter' || p.permissionType === 'Editor')
+  );
+  if (doc.confidentialityLevel === 'Confidential') return user.role === 'Admin' || mayComment;
+  return user.role === 'Admin' || user.role === 'Manager' || mayComment;
+}
+
+function canDeleteFolder(user: Pick<User, 'id' | 'role' | 'institutionId'>, folder: Folder): boolean {
+  return user.institutionId === folder.institutionId && (user.role === 'Admin' || user.role === 'Manager' || folder.ownerId === user.id);
 }
 
 // File History / audit trail: restricted to Manager, Admin, and Auditor roles.
@@ -334,11 +405,14 @@ function documentNeedsAudit(doc: Document): boolean {
 
 // Documents this user may see, with basic filters pushed down to the store.
 async function visibleDocuments(user: Viewer, filter: DocumentFilter = {}): Promise<Document[]> {
-  const docs = await db().listDocuments(filter);
-  if (user.role === 'Admin' || user.role === 'Manager' || user.role === 'Auditor') return docs;
+  const { starred, ...storeFilter } = filter;
+  let docs = (await db().listDocuments(storeFilter)).filter(d => d.institutionId === user.institutionId);
   const perms = await db().listPermissionsForUser(user.id);
   const sharedIds = new Set(perms.map(p => p.documentId));
-  return docs.filter(d => canViewWithShares(user, d, sharedIds));
+  docs = docs.filter(d => canViewWithShares(user, d, sharedIds));
+  const starredIds = new Set(await db().listStarredDocumentIds(user.id));
+  docs = docs.map(d => ({ ...d, isStarred: starredIds.has(d.id) }));
+  return starred ? docs.filter(d => d.isStarred) : docs;
 }
 
 // ----------------------------------------------------
@@ -378,6 +452,39 @@ function isPreviewableInline(fileType?: string): boolean {
   // inert when rendered (bitmap images, PDF, plain/non-HTML text, JSON).
   if (mime === 'image/svg+xml' || mime === 'text/html') return false;
   return mime.startsWith('image/') || mime === 'application/pdf' || mime.startsWith('text/') || mime === 'application/json';
+}
+
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const ALLOWED_UPLOAD_EXTENSIONS = new Set([
+  'pdf', 'docx', 'xlsx', 'pptx', 'txt', 'csv', 'md', 'json',
+  'png', 'jpg', 'jpeg', 'gif', 'webp'
+]);
+
+function validateUploadFile(fileName: unknown, fileType: unknown, declaredSize: unknown, buffer?: Buffer): string | null {
+  const name = String(fileName || '').trim();
+  const type = String(fileType || '').toLowerCase();
+  const size = Number(declaredSize) || buffer?.byteLength || 0;
+  if (!name || /[\u0000-\u001f\u007f]/.test(name) || name.length > 240) return 'Invalid file name.';
+  const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
+  if (!ALLOWED_UPLOAD_EXTENSIONS.has(ext)) return `Files of type .${ext || 'unknown'} are not allowed.`;
+  if (size <= 0 || size > MAX_UPLOAD_BYTES || (buffer && buffer.byteLength > MAX_UPLOAD_BYTES)) {
+    return 'File must be between 1 byte and 25 MB.';
+  }
+  if (/(html|svg|javascript|x-msdownload|x-sh|executable)/.test(type)) return 'Executable or active-content files are not allowed.';
+  if (!buffer) return null;
+  const starts = (...bytes: number[]) => bytes.every((byte, index) => buffer[index] === byte);
+  const officeZip = ['docx', 'xlsx', 'pptx'].includes(ext);
+  if (ext === 'pdf' && buffer.subarray(0, 5).toString() !== '%PDF-') return 'The file content does not match a PDF.';
+  if (ext === 'png' && !starts(0x89, 0x50, 0x4e, 0x47)) return 'The file content does not match a PNG image.';
+  if (['jpg', 'jpeg'].includes(ext) && !starts(0xff, 0xd8, 0xff)) return 'The file content does not match a JPEG image.';
+  if (ext === 'gif' && !['GIF87a', 'GIF89a'].includes(buffer.subarray(0, 6).toString())) return 'The file content does not match a GIF image.';
+  if (ext === 'webp' && !(buffer.subarray(0, 4).toString() === 'RIFF' && buffer.subarray(8, 12).toString() === 'WEBP')) return 'The file content does not match a WebP image.';
+  if (officeZip && !(starts(0x50, 0x4b, 0x03, 0x04) || starts(0x50, 0x4b, 0x05, 0x06))) return 'The Office file has an invalid container.';
+  if (['txt', 'csv', 'md', 'json'].includes(ext) && buffer.subarray(0, 4096).includes(0)) return 'Text files may not contain binary data.';
+  if (ext === 'json') {
+    try { JSON.parse(buffer.toString('utf8')); } catch { return 'The JSON file is invalid.'; }
+  }
+  return null;
 }
 
 function latestOf(versions: DocumentVersion[]): DocumentVersion | undefined {
@@ -429,6 +536,30 @@ function requestBaseUrl(req: express.Request): string {
   return `${proto}://${req.headers.host || 'localhost'}`;
 }
 
+function requestIp(req: express.Request): string {
+  return String(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.ip || 'unknown').split(',')[0].trim();
+}
+
+async function rateLimited(key: string, maxAttempts = 10): Promise<boolean> {
+  const hashedKey = sha256Hex(key);
+  if (supabase && storageEnabled) {
+    const { data, error } = await supabase.rpc('docuhub_check_rate_limit', {
+      p_key: hashedKey, p_window_seconds: 15 * 60, p_max_attempts: maxAttempts
+    });
+    if (!error) return Boolean(data);
+    console.error('[auth] durable rate limiter failed; using local fallback:', error.message);
+  }
+  return loginRateLimited(hashedKey);
+}
+
+async function clearRateLimit(...keys: string[]): Promise<void> {
+  const hashes = keys.map(sha256Hex);
+  hashes.forEach(clearLoginAttempts);
+  if (supabase && storageEnabled) {
+    await supabase.from('auth_rate_limits').delete().in('rate_key', hashes);
+  }
+}
+
 // Share/share-link notifications use a Resend dashboard-authored template
 // when RESEND_SHARE_TEMPLATE_ID is set, falling back to the raw-HTML
 // mail (built by documentSharedEmail/externalLinkSharedEmail) otherwise --
@@ -459,7 +590,7 @@ async function genShortCode(): Promise<string> {
   const alphabet = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   for (let attempt = 0; attempt < 8; attempt++) {
     let code = '';
-    for (let i = 0; i < 7; i++) code += alphabet[Math.floor(Math.random() * alphabet.length)];
+    for (let i = 0; i < 10; i++) code += alphabet[crypto.randomInt(alphabet.length)];
     if (!(await db().getLinkByCode(code))) return code;
   }
   return crypto.randomBytes(6).toString('hex');
@@ -553,7 +684,7 @@ async function previewAutoFolder(
   category: Document['documentType'],
   activity?: string
 ): Promise<{ path: string; exists: boolean; missingCabinets: string[] }> {
-  const folders = await db().listFolders();
+  const folders = (await db().listFolders()).filter(folder => folder.institutionId === inst.id);
   const unitName = department && department.trim() ? department.trim() : 'Unassigned Unit';
   const categoryName = categoryFolderName(inst, category);
   const activityName = inst.activityDimension === 'ai-activity' ? normalizeActivity(activity) : null;
@@ -584,7 +715,8 @@ async function ensureFolder(
   name: string,
   parentFolderId: string | null,
   department: string | undefined,
-  ownerId: string
+  ownerId: string,
+  institutionId: string
 ): Promise<Folder> {
   const existing = findFolderIn(folders, name, parentFolderId, department);
   if (existing) return existing;
@@ -593,6 +725,7 @@ async function ensureFolder(
     name,
     parentFolderId,
     ownerId,
+    institutionId,
     department,
     createdAt: new Date().toISOString()
   };
@@ -608,14 +741,14 @@ async function resolveAutoFolder(
   category: Document['documentType'],
   activity?: string
 ): Promise<{ folderId: string; path: string }> {
-  const folders = await db().listFolders();
+  const folders = (await db().listFolders()).filter(folder => folder.institutionId === inst.id);
   const unitName = department && department.trim() ? department.trim() : 'Unassigned Unit';
-  const unitFolder = await ensureFolder(folders, unitName, null, department, ownerId);
+  const unitFolder = await ensureFolder(folders, unitName, null, department, ownerId, inst.id);
   const categoryName = categoryFolderName(inst, category);
-  const categoryFolder = await ensureFolder(folders, categoryName, unitFolder.id, department, ownerId);
+  const categoryFolder = await ensureFolder(folders, categoryName, unitFolder.id, department, ownerId, inst.id);
   if (inst.activityDimension === 'ai-activity') {
     const activityName = normalizeActivity(activity);
-    const activityFolder = await ensureFolder(folders, activityName, categoryFolder.id, department, ownerId);
+    const activityFolder = await ensureFolder(folders, activityName, categoryFolder.id, department, ownerId, inst.id);
     return { folderId: activityFolder.id, path: `${unitName} / ${categoryName} / ${activityName}` };
   }
   return { folderId: categoryFolder.id, path: `${unitName} / ${categoryName}` };
@@ -642,6 +775,7 @@ function collectFolderTreeIds(folders: Folder[], folderId: string): string[] {
 let aiClient: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI | null {
   if (!aiClient) {
+    if (process.env.ENABLE_EXTERNAL_AI !== 'true') return null;
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       console.warn('GEMINI_API_KEY environment variable is missing. Multimodal OCR & Tags will use premium local heuristics simulation.');
@@ -663,7 +797,6 @@ async function runAiOcrAndTagging(fileName: string, mimeType: string, fileDataB6
 
   if (ai) {
     try {
-      console.log(`Running smart Gemini OCR & Automated Tagging for: ${fileName}`);
       let contents: any;
       if (isImage) {
         contents = {
@@ -744,7 +877,6 @@ Format the output strictly as JSON matching this shape:
 
       if (response && response.text) {
         const result = JSON.parse(response.text.trim());
-        console.log('Gemini Analysis successfully completed:', result);
         return {
           ocrText: result.ocrText || 'No text extracted during scan.',
           tags: result.tags || ['analyzed'],
@@ -821,7 +953,10 @@ function h(fn: (req: express.Request, res: express.Response) => Promise<unknown>
   return (req, res) => {
     fn(req, res).catch(err => {
       console.error(`[api] ${req.method} ${req.path} failed:`, err);
-      if (!res.headersSent) res.status(500).json({ error: 'Internal server error.', details: (err as Error).message });
+      if (!res.headersSent) res.status(500).json({
+        error: 'Internal server error.',
+        ...(process.env.NODE_ENV === 'production' ? {} : { details: (err as Error).message })
+      });
     });
   };
 }
@@ -833,7 +968,9 @@ app.post('/api/auth/login', h(async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   const password = String(req.body?.password || '');
   if (!email || !password) return res.status(400).json({ error: 'Email and password are required.' });
-  if (loginRateLimited(email)) {
+  const ipKey = `login-ip:${requestIp(req)}`;
+  const emailKey = `login-email:${email}`;
+  if (await rateLimited(ipKey, 50) || await rateLimited(emailKey, 10)) {
     return res.status(429).json({ error: 'Too many login attempts. Try again in a few minutes.' });
   }
 
@@ -845,8 +982,8 @@ app.post('/api/auth/login', h(async (req, res) => {
     return res.status(403).json({ error: 'This account is inactive. Contact your administrator.' });
   }
 
-  clearLoginAttempts(email);
-  setSessionCookie(req, res, user.id);
+  await clearRateLimit(ipKey, emailKey);
+  setSessionCookie(req, res, user.id, user.sessionVersion || 0);
   await db().updateUser(user.id, { lastLoginAt: new Date().toISOString() });
   await logActivity(user, 'Login', undefined, undefined, `${user.fullName} signed in.`);
   res.json({ success: true, user: publicUser(user), mustChangePassword: Boolean(user.mustChangePassword) });
@@ -879,8 +1016,13 @@ app.get('/api/auth/oauth/:provider/start', h(async (req, res) => {
   if (!isProviderConfigured(provider)) {
     return res.status(503).send(`Sign-in with ${provider === 'google' ? 'Google' : 'Microsoft'} is not configured on this server.`);
   }
-  const state = signSession(`oauth:${provider}:${crypto.randomBytes(8).toString('hex')}`, Date.now() + OAUTH_STATE_TTL_MS);
-  res.redirect(302, buildAuthorizeUrl(provider, oauthRedirectUri(req, provider), state));
+  const nonce = crypto.randomBytes(24).toString('hex');
+  const verifier = crypto.randomBytes(32).toString('base64url');
+  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+  const stateSubject = `oauth:${provider}:${nonce}:${verifier}`;
+  const state = signSession(stateSubject, Date.now() + OAUTH_STATE_TTL_MS);
+  setSignedCookie(req, res, 'oauth_state', stateSubject, OAUTH_STATE_TTL_MS, 'Lax');
+  res.redirect(302, buildAuthorizeUrl(provider, oauthRedirectUri(req, provider), state, nonce, challenge));
 }));
 
 // This is an alternative login method for accounts an Admin has already
@@ -903,11 +1045,14 @@ app.get('/api/auth/oauth/:provider/callback', h(async (req, res) => {
   if (!code || !state) return res.redirect(302, failUrl('Missing sign-in parameters. Please try again.'));
 
   const statePayload = verifySession(state);
-  if (!statePayload || !statePayload.startsWith(`oauth:${provider}:`)) {
+  const cookieState = verifySession(parseCookies(req).oauth_state || '');
+  if (!statePayload || statePayload !== cookieState || !statePayload.startsWith(`oauth:${provider}:`)) {
     return res.redirect(302, failUrl('This sign-in attempt expired. Please try again.'));
   }
+  const [nonce, verifier] = statePayload.slice(`oauth:${provider}:`.length).split(':');
+  if (!nonce || !verifier) return res.redirect(302, failUrl('This sign-in attempt is invalid. Please try again.'));
 
-  const profile = await exchangeCodeForProfile(provider, code, oauthRedirectUri(req, provider));
+  const profile = await exchangeCodeForProfile(provider, code, oauthRedirectUri(req, provider), nonce, verifier);
   if (!profile) return res.redirect(302, failUrl(`Could not verify your ${providerLabel} account. Please try again.`));
 
   const existingUser = await db().getUserByEmail(profile.email);
@@ -918,7 +1063,7 @@ app.get('/api/auth/oauth/:provider/callback', h(async (req, res) => {
     return res.redirect(302, failUrl('This account has been deactivated. Contact your administrator.'));
   }
 
-  setSessionCookie(req, res, existingUser.id);
+  setSessionCookie(req, res, existingUser.id, existingUser.sessionVersion || 0);
   await db().updateUser(existingUser.id, { lastLoginAt: new Date().toISOString() });
   await logActivity(existingUser, 'Login', undefined, undefined, `${existingUser.fullName} signed in via ${providerLabel}.`);
   res.redirect(302, `${baseUrl}/`);
@@ -932,7 +1077,7 @@ app.post('/api/auth/logout', h(async (req, res) => {
 }));
 
 app.post('/api/auth/change-password', h(async (req, res) => {
-  const user = await requireUser(req, res);
+  const user = await requireUser(req, res, true);
   if (!user) return;
   const { currentPassword, newPassword } = req.body || {};
 
@@ -945,12 +1090,15 @@ app.post('/api/auth/change-password', h(async (req, res) => {
     return res.status(401).json({ error: 'Current password is incorrect.' });
   }
 
+  const nextSessionVersion = (user.sessionVersion || 0) + 1;
   await db().updateUser(user.id, {
     passwordHash: hashPassword(String(newPassword)),
     mustChangePassword: false,
+    sessionVersion: nextSessionVersion,
     resetTokenHash: undefined,
     resetTokenExpiresAt: undefined
   });
+  setSessionCookie(req, res, user.id, nextSessionVersion);
   await logActivity(user, 'Change Password', undefined, undefined, 'Password changed.');
   res.json({ success: true });
 }));
@@ -988,6 +1136,7 @@ app.post('/api/auth/reset-password', h(async (req, res) => {
   await db().updateUser(user.id, {
     passwordHash: hashPassword(newPassword),
     mustChangePassword: false,
+    sessionVersion: (user.sessionVersion || 0) + 1,
     resetTokenHash: undefined,
     resetTokenExpiresAt: undefined
   });
@@ -1050,7 +1199,7 @@ async function sanitizeUserPayload(body: Partial<User>): Promise<{ value?: Omit<
 app.get('/api/users', h(async (req, res) => {
   const user = await requireUser(req, res);
   if (!user) return;
-  const users = await db().listUsers();
+  const users = (await db().listUsers()).filter(candidate => candidate.institutionId === user.institutionId && candidate.isActive);
   res.json(users.map(publicUser));
 }));
 
@@ -1060,7 +1209,7 @@ app.post('/api/users', h(async (req, res) => {
   const admin = await requireAdmin(req, res);
   if (!admin) return;
 
-  const parsed = await sanitizeUserPayload(req.body || {});
+  const parsed = await sanitizeUserPayload({ ...(req.body || {}), institutionId: admin.institutionId });
   if (parsed.error || !parsed.value) return res.status(400).json({ error: parsed.error });
   if (await db().getUserByEmail(parsed.value.email)) {
     return res.status(409).json({ error: 'A user with this email already exists.' });
@@ -1071,7 +1220,8 @@ app.post('/api/users', h(async (req, res) => {
     id: newId('user'),
     ...parsed.value,
     passwordHash: hashPassword(tempPassword),
-    mustChangePassword: true
+    mustChangePassword: true,
+    sessionVersion: 0
   };
 
   await db().createUser(user);
@@ -1089,12 +1239,19 @@ app.put('/api/users/:id', h(async (req, res) => {
   const target = await db().getUser(req.params.id);
   if (!target) return res.status(404).json({ error: 'User not found.' });
 
-  const parsed = await sanitizeUserPayload({ ...publicUser(target), ...(req.body || {}) });
+  if (target.institutionId !== admin.institutionId) return res.status(403).json({ error: 'Cross-institution user management is not allowed.' });
+  const parsed = await sanitizeUserPayload({ ...publicUser(target), ...(req.body || {}), institutionId: admin.institutionId });
   if (parsed.error || !parsed.value) return res.status(400).json({ error: parsed.error });
 
   const duplicate = await db().getUserByEmail(parsed.value.email);
   if (duplicate && duplicate.id !== target.id) {
     return res.status(409).json({ error: 'A user with this email already exists.' });
+  }
+  if (target.role === 'Admin' && target.isActive && (parsed.value.role !== 'Admin' || parsed.value.isActive === false)) {
+    const otherAdmins = (await db().listUsers()).filter(candidate =>
+      candidate.id !== target.id && candidate.institutionId === target.institutionId && candidate.role === 'Admin' && candidate.isActive
+    );
+    if (otherAdmins.length === 0) return res.status(400).json({ error: 'At least one active Admin is required.' });
   }
 
   const updated = await db().updateUser(target.id, parsed.value);
@@ -1109,6 +1266,7 @@ app.post('/api/users/:id/toggle-active', h(async (req, res) => {
 
   const target = await db().getUser(req.params.id);
   if (!target) return res.status(404).json({ error: 'User not found.' });
+  if (target.institutionId !== admin.institutionId) return res.status(403).json({ error: 'Cross-institution user management is not allowed.' });
 
   const nextActive = req.body?.isActive !== undefined ? Boolean(req.body.isActive) : !target.isActive;
   if (!nextActive && target.role === 'Admin') {
@@ -1129,11 +1287,13 @@ app.post('/api/users/:id/reset-password', h(async (req, res) => {
 
   const target = await db().getUser(req.params.id);
   if (!target) return res.status(404).json({ error: 'User not found.' });
+  if (target.institutionId !== admin.institutionId) return res.status(403).json({ error: 'Cross-institution user management is not allowed.' });
 
   const tempPassword = generateTempPassword();
   await db().updateUser(target.id, {
     passwordHash: hashPassword(tempPassword),
     mustChangePassword: true,
+    sessionVersion: (target.sessionVersion || 0) + 1,
     resetTokenHash: undefined,
     resetTokenExpiresAt: undefined
   });
@@ -1156,7 +1316,6 @@ app.get('/api/institutions', h(async (req, res) => {
   const user = await requireUser(req, res);
   if (!user) return;
   const institutions = await db().listInstitutions();
-  if (user.role === 'Admin') return res.json(institutions);
   res.json(institutions.filter(i => i.id === user.institutionId));
 }));
 
@@ -1168,7 +1327,7 @@ app.put('/api/institution', h(async (req, res) => {
   }
 
   const institutions = await db().listInstitutions();
-  const inst = institutions.find(i => i.id === user.institutionId) || institutions[0];
+  const inst = institutions.find(i => i.id === user.institutionId);
   if (!inst) return res.status(404).json({ error: 'Institution not found.' });
 
   const { name, units, categoryFolders, activityDimension } = req.body || {};
@@ -1236,7 +1395,7 @@ app.get('/api/stats', h(async (req, res) => {
     totalSize: sizeSum,
     approvedCount: approved,
     pendingMyApprovalCount: pendingMine.length,
-    totalUsers: users.filter(u => u.isActive).length,
+    totalUsers: users.filter(u => u.isActive && u.institutionId === user.institutionId).length,
     recentUploadsCount: visibleDocs.filter(d => new Date(d.createdAt).getTime() > weekAgo).length,
     needsAuditCount: canAudit(user) ? visibleDocs.filter(documentNeedsAudit).length : 0
   };
@@ -1249,7 +1408,7 @@ app.get('/api/stats', h(async (req, res) => {
 app.get('/api/folders', h(async (req, res) => {
   const user = await requireUser(req, res);
   if (!user) return;
-  res.json(await db().listFolders());
+  res.json((await db().listFolders()).filter(folder => folder.institutionId === user.institutionId));
 }));
 
 app.post('/api/folders', h(async (req, res) => {
@@ -1263,13 +1422,20 @@ app.post('/api/folders', h(async (req, res) => {
   if (!name || String(name).trim() === '') {
     return res.status(400).json({ error: 'Folder name is required.' });
   }
+  if (parentFolderId) {
+    const parent = await db().getFolder(String(parentFolderId));
+    if (!parent || parent.institutionId !== user.institutionId) {
+      return res.status(400).json({ error: 'Parent folder is invalid.' });
+    }
+  }
 
   const newFolder: Folder = {
     id: newId('folder'),
     name,
     parentFolderId: parentFolderId || null,
     ownerId: user.id,
-    department: department || undefined,
+    institutionId: user.institutionId!,
+    department: ['Admin', 'Manager'].includes(user.role) ? (department || undefined) : user.department,
     createdAt: new Date().toISOString()
   };
   await db().createFolder(newFolder);
@@ -1287,7 +1453,7 @@ app.delete('/api/folders/:id', h(async (req, res) => {
     return res.status(403).json({ error: 'You do not have permission to delete this folder.' });
   }
 
-  const folders = await db().listFolders();
+  const folders = (await db().listFolders()).filter(candidate => candidate.institutionId === user.institutionId);
   const folderIds = collectFolderTreeIds(folders, folder.id);
   const folderIdSet = new Set(folderIds);
   const allDocs = await db().listDocuments({ deleted: 'any' });
@@ -1372,12 +1538,13 @@ app.get('/api/documents/:id', h(async (req, res) => {
     db().listCommentsForDocument(doc.id),
     db().listApprovalsForDocument(doc.id),
     db().listPermissionsForDocument(doc.id),
-    db().listActiveLinksForDocument(doc.id),
+    canEditDocument(user, doc).then(canEdit => canEdit ? db().listActiveLinksForDocument(doc.id) : []),
     canAudit(user) ? db().listLogsForDocument(doc.id) : Promise.resolve([])
   ]);
+  const isStarred = (await db().listStarredDocumentIds(user.id)).includes(doc.id);
 
   res.json({
-    document: withFileMetadata(doc, latestOf(versions)),
+    document: withFileMetadata({ ...doc, isStarred }, latestOf(versions)),
     versions,
     comments,
     approvals,
@@ -1420,11 +1587,13 @@ app.post('/api/documents/scan', h(async (req, res) => {
   const user = await requireUser(req, res);
   if (!user) return;
 
-  const { fileName, fileType, fileData, storagePath, fileSize, department } = req.body || {};
+  const { fileName, fileType, fileData, storagePath, uploadClaim, fileSize, department } = req.body || {};
   if (!fileName || (!fileData && !storagePath)) {
     return res.status(400).json({ error: 'File name and file data (or a storagePath) are required for scanning.' });
   }
-  if (storagePath && !isPendingUploadOwnedBy(storagePath, user.id)) {
+  const scanValidation = validateUploadFile(fileName, fileType, fileSize, fileData ? storedFileToBuffer(String(fileData)) : undefined);
+  if (scanValidation) return res.status(400).json({ error: scanValidation });
+  if (storagePath && !verifyUploadClaim(storagePath, user.id, uploadClaim)) {
     return res.status(403).json({ error: 'This storagePath was not issued to you.' });
   }
 
@@ -1435,7 +1604,8 @@ app.post('/api/documents/scan', h(async (req, res) => {
       : await runAiOcrAndTagging(String(fileName), 'application/octet-stream', '');
     const institution = await getInstitutionFor(user.institutionId);
     const finalCategory = coerceDocumentCategory(aiResult.documentType) || 'Other';
-    const finalDept = String(department || user.department || '').trim() || user.department;
+    const requestedDept = String(department || user.department || '').trim() || user.department;
+    const finalDept = ['Admin', 'Manager'].includes(user.role) ? requestedDept : user.department;
     const filing = await previewAutoFolder(institution, finalDept, finalCategory, aiResult.activity);
 
     res.json({
@@ -1458,8 +1628,10 @@ app.post('/api/documents/scan', h(async (req, res) => {
 app.post('/api/uploads/sign', h(async (req, res) => {
   const user = await requireUser(req, res);
   if (!user) return;
-  const { fileName } = req.body || {};
+  const { fileName, fileType, fileSize } = req.body || {};
   if (!fileName) return res.status(400).json({ error: 'fileName is required.' });
+  const signValidation = validateUploadFile(fileName, fileType, fileSize);
+  if (signValidation) return res.status(400).json({ error: signValidation });
 
   if (!storageEnabled || !supabase) return res.json({ enabled: false });
 
@@ -1469,8 +1641,8 @@ app.post('/api/uploads/sign', h(async (req, res) => {
     console.error('[storage] signed upload url failed:', error?.message);
     return res.json({ enabled: false });
   }
-  registerPendingUpload(objectPath, user.id);
-  res.json({ enabled: true, objectPath, uploadUrl: data.signedUrl, token: data.token });
+  const uploadClaim = issueUploadClaim(objectPath, user.id);
+  res.json({ enabled: true, objectPath, uploadUrl: data.signedUrl, token: data.token, uploadClaim });
 }));
 
 // Upload: accepts inline base64 (`fileData`, local-dev/small files) or a
@@ -1484,13 +1656,22 @@ app.post('/api/documents/upload', h(async (req, res) => {
   const userId = user.id;
   const dept = user.department;
 
-  const { title, description, folderId, documentType, fileName, fileSize, fileType, fileData, storagePath, department, autoFile, categoryMode } = req.body;
+  const { title, description, folderId, documentType, fileName, fileSize, fileType, fileData, storagePath, uploadClaim, department, autoFile, categoryMode } = req.body;
 
   if (!title || !fileName || (!fileData && !storagePath)) {
     return res.status(400).json({ error: 'Title, file name, and file data (or storagePath) are required.' });
   }
-  if (storagePath && !claimPendingUpload(storagePath, user.id)) {
+  if (storagePath && !verifyUploadClaim(storagePath, user.id, uploadClaim)) {
     return res.status(403).json({ error: 'This storagePath was not issued to you, or has already been used.' });
+  }
+  const incomingBuffer = fileData
+    ? storedFileToBuffer(String(fileData))
+    : storagePath ? await downloadStoredFile(String(storagePath)) : null;
+  if (!incomingBuffer) return res.status(400).json({ error: 'Uploaded file content could not be verified.' });
+  const uploadValidation = validateUploadFile(fileName, fileType, fileSize, incomingBuffer);
+  if (uploadValidation) {
+    if (storagePath && storageEnabled && supabase) await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]);
+    return res.status(400).json({ error: uploadValidation });
   }
 
   const manualCategory = coerceDocumentCategory(documentType);
@@ -1513,7 +1694,8 @@ app.post('/api/documents/upload', h(async (req, res) => {
     const finalCategory: Document['documentType'] = categoryMode === 'manual' && manualCategory
       ? manualCategory
       : scannedCategory;
-    const finalDept = department || dept;
+    const requestedDept = String(department || dept).trim() || dept;
+    const finalDept = ['Admin', 'Manager'].includes(user.role) ? requestedDept : dept;
     const institution = await getInstitutionFor(user.institutionId);
 
     let destinationFolderId: string | null;
@@ -1523,6 +1705,12 @@ app.post('/api/documents/upload', h(async (req, res) => {
       destinationFolderId = resolved.folderId;
       filedInto = resolved.path;
     } else {
+      if (folderId) {
+        const destination = await db().getFolder(folderId);
+        if (!destination || destination.institutionId !== user.institutionId) {
+          return res.status(400).json({ error: 'Destination folder is invalid.' });
+        }
+      }
       destinationFolderId = folderId || null;
     }
 
@@ -1534,6 +1722,7 @@ app.post('/api/documents/upload', h(async (req, res) => {
       description: description || aiResult.description,
       ownerId: userId,
       ownerName: user.fullName,
+      institutionId: user.institutionId!,
       department: finalDept,
       folderId: destinationFolderId,
       documentType: finalCategory,
@@ -1588,7 +1777,7 @@ app.post('/api/documents/upload', h(async (req, res) => {
 app.post('/api/documents/:id/version', h(async (req, res) => {
   const user = await requireUser(req, res);
   if (!user) return;
-  const { fileName, fileSize, fileType, fileData, storagePath } = req.body;
+  const { fileName, fileSize, fileType, fileData, storagePath, uploadClaim } = req.body;
   const docId = req.params.id;
 
   const doc = await db().getDocument(docId);
@@ -1599,8 +1788,17 @@ app.post('/api/documents/:id/version', h(async (req, res) => {
   if (!fileName || (!fileData && !storagePath)) {
     return res.status(400).json({ error: 'File name and data are required.' });
   }
-  if (storagePath && !claimPendingUpload(storagePath, user.id)) {
+  if (storagePath && !verifyUploadClaim(storagePath, user.id, uploadClaim)) {
     return res.status(403).json({ error: 'This storagePath was not issued to you, or has already been used.' });
+  }
+  const incomingBuffer = fileData
+    ? storedFileToBuffer(String(fileData))
+    : storagePath ? await downloadStoredFile(String(storagePath)) : null;
+  if (!incomingBuffer) return res.status(400).json({ error: 'Uploaded file content could not be verified.' });
+  const versionValidation = validateUploadFile(fileName, fileType, fileSize, incomingBuffer);
+  if (versionValidation) {
+    if (storagePath && storageEnabled && supabase) await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]);
+    return res.status(400).json({ error: versionValidation });
   }
 
   try {
@@ -1628,13 +1826,6 @@ app.post('/api/documents/:id/version', h(async (req, res) => {
       : await runAiOcrAndTagging(fileName, 'application/octet-stream', '');
 
     const mergedTags = Array.from(new Set([...doc.tags, ...aiResult.tags]));
-    const updatedDoc = await db().updateDocument(docId, {
-      currentVersion: nextVerStr,
-      updatedAt: now,
-      ocrText: aiResult.ocrText,
-      tags: mergedTags
-    });
-
     await db().createVersion(newVersion);
     if (!storagePath && fileData) {
       const offloaded = await offloadVersion(newVersion, fileData, fileType);
@@ -1644,9 +1835,19 @@ app.post('/api/documents/:id/version', h(async (req, res) => {
       }
     }
 
+    const updatedDoc = await db().updateDocument(docId, {
+      currentVersion: nextVerStr,
+      updatedAt: now,
+      ocrText: aiResult.ocrText,
+      tags: mergedTags
+    });
+
     await logActivity(user, 'Upload Version', docId, doc.title, `Uploaded version ${nextVerStr} replacing former draft.`);
     res.json({ success: true, document: updatedDoc, version: newVersion });
   } catch (err: any) {
+    if (/duplicate document version|duplicate key value|document_versions_doc_version_key|document_versions_storage_path_key/i.test(String(err?.message || ''))) {
+      return res.status(409).json({ error: 'A concurrent version upload already used this version number or storage object. Refresh and try again.' });
+    }
     res.status(500).json({ error: 'Version update failed.', details: err.message });
   }
 }));
@@ -1661,8 +1862,11 @@ app.post('/api/documents/:id/star', h(async (req, res) => {
     return res.status(403).json({ error: 'You do not have access to this document.' });
   }
 
-  const updated = await db().updateDocument(doc.id, { isStarred: !doc.isStarred });
-  const actionName = updated?.isStarred ? 'Star' : 'Unstar';
+  const starredIds = await db().listStarredDocumentIds(user.id);
+  const nextStarred = !starredIds.includes(doc.id);
+  await db().setDocumentStar(user.id, doc.id, nextStarred);
+  const updated = { ...doc, isStarred: nextStarred };
+  const actionName = nextStarred ? 'Star' : 'Unstar';
   await logActivity(user, actionName, doc.id, doc.title, `${actionName}red document.`);
   res.json({ success: true, document: updated });
 }));
@@ -1711,14 +1915,18 @@ app.post('/api/documents/:id/permanently-delete', h(async (req, res) => {
   // columns) disappear via FK cascade.
   const versions = await db().listVersions(doc.id);
   const storagePaths = versions.map(v => v.storagePath).filter((p): p is string => Boolean(p));
+  const exclusivelyOwnedPaths: string[] = [];
+  for (const storagePath of storagePaths) {
+    if (await db().countVersionsWithStoragePath(storagePath) === 1) exclusivelyOwnedPaths.push(storagePath);
+  }
 
   await db().deleteDocument(doc.id);
 
   // Best-effort: the document is already gone from the app's perspective
   // either way. A failure here just leaves an orphaned (harmless, invisible)
   // Storage object rather than blocking the purge.
-  if (storagePaths.length > 0 && storageEnabled && supabase) {
-    const { error } = await supabase.storage.from(STORAGE_BUCKET).remove(storagePaths);
+  if (exclusivelyOwnedPaths.length > 0 && storageEnabled && supabase) {
+    const { error } = await supabase.storage.from(STORAGE_BUCKET).remove(exclusivelyOwnedPaths);
     if (error) console.error('[storage] cleanup failed for purged document', doc.id, error.message);
   }
 
@@ -1739,6 +1947,34 @@ app.post('/api/documents/:id/archive', h(async (req, res) => {
   const updated = await db().updateDocument(doc.id, { isArchived: !doc.isArchived, updatedAt: new Date().toISOString() });
   const detailsStr = updated?.isArchived ? 'Moved document and marked as official Archived file.' : 'Restored document from Archive database.';
   await logActivity(user, 'Archive', doc.id, doc.title, detailsStr);
+  res.json({ success: true, document: updated });
+}));
+
+app.post('/api/documents/:id/classification', h(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+  if (!['Admin', 'Manager'].includes(user.role)) {
+    return res.status(403).json({ error: 'Only an Admin or Manager may change document classification.' });
+  }
+  const doc = await db().getDocument(req.params.id);
+  if (!doc) return res.status(404).json({ error: 'Document not found.' });
+  if (!(await canEditDocument(user, doc))) {
+    return res.status(403).json({ error: 'Editor access is required to change document classification.' });
+  }
+  const level = req.body?.confidentialityLevel as Document['confidentialityLevel'];
+  if (!['Normal File', 'Official Record', 'Confidential', 'Archive'].includes(level)) {
+    return res.status(400).json({ error: 'Invalid document classification.' });
+  }
+  const updated = await db().updateDocument(doc.id, {
+    confidentialityLevel: level,
+    isArchived: level === 'Archive',
+    updatedAt: new Date().toISOString()
+  });
+  if (level === 'Confidential') {
+    const links = await db().listActiveLinksForDocument(doc.id);
+    await Promise.all(links.map(link => db().updateLink(link.id, { isActive: false })));
+  }
+  await logActivity(user, 'Classify', doc.id, doc.title, `Changed classification from ${doc.confidentialityLevel} to ${level}.`);
   res.json({ success: true, document: updated });
 }));
 
@@ -1778,11 +2014,11 @@ app.post('/api/documents/:id/move', h(async (req, res) => {
   let folderName = 'Root Storage';
   if (folderId) {
     const f = await db().getFolder(folderId);
-    if (f) {
+    if (f && f.institutionId === user.institutionId) {
       folderName = f.name;
       if (f.department) patch.department = f.department;
     } else {
-      folderName = folderId;
+      return res.status(400).json({ error: 'Destination folder is invalid.' });
     }
   }
 
@@ -1806,6 +2042,13 @@ app.post('/api/documents/:id/request-approval', h(async (req, res) => {
 
   const approver = await db().getUser(approverId);
   if (!approver) return res.status(404).json({ error: 'Selected approver manager was not found.' });
+  if (!approver.isActive || approver.institutionId !== user.institutionId || !['Manager', 'Admin'].includes(approver.role)) {
+    return res.status(400).json({ error: 'Approver must be an active Manager or Admin in your institution.' });
+  }
+  const existingApprovals = await db().listApprovalsForDocument(docId);
+  if (existingApprovals.some(approval => approval.status === 'Pending Approval')) {
+    return res.status(409).json({ error: 'This document already has a pending approval request.' });
+  }
 
   const now = new Date().toISOString();
   const updatedDoc = await db().updateDocument(docId, { status: 'Pending Approval', updatedAt: now });
@@ -1857,6 +2100,9 @@ app.post('/api/approvals/:id/decide', h(async (req, res) => {
 
   const approval = await db().getApproval(req.params.id);
   if (!approval) return res.status(404).json({ error: 'Approval request registry trace not found.' });
+  if (approval.status !== 'Pending Approval') {
+    return res.status(409).json({ error: 'This approval request has already been decided.' });
+  }
   if (approval.approverId !== user.id && user.role !== 'Admin') {
     return res.status(403).json({ error: 'Only the assigned approver can decide this request.' });
   }
@@ -1912,6 +2158,12 @@ app.post('/api/documents/:id/share', h(async (req, res) => {
 
   const targetUser = await db().getUser(targetUserId);
   if (!targetUser) return res.status(404).json({ error: 'Target recipient not found.' });
+  if (!targetUser.isActive || targetUser.institutionId !== user.institutionId) {
+    return res.status(400).json({ error: 'Recipient must be active and belong to your institution.' });
+  }
+  if (!['Viewer', 'Commenter', 'Editor'].includes(permissionType)) {
+    return res.status(400).json({ error: 'Invalid share permission.' });
+  }
 
   await db().upsertPermission({
     id: newId('perm'),
@@ -1952,20 +2204,29 @@ app.post('/api/documents/:id/external-link', h(async (req, res) => {
   if (!(await canEditDocument(user, doc))) {
     return res.status(403).json({ error: 'You do not have permission to create a share link for this document.' });
   }
+  if (doc.confidentialityLevel === 'Confidential' && user.role !== 'Admin') {
+    return res.status(403).json({ error: 'Only an Admin may create an external link for a confidential document.' });
+  }
 
   const { message, allowDownload, requiresPassword, password, maxDownloads, expiresInDays, permissionType, recipientEmails } = req.body || {};
 
   let expiresAt: string;
-  if (expiresInDays === null) {
-    expiresAt = new Date('2999-12-31T00:00:00Z').toISOString();
-  } else {
-    const days = typeof expiresInDays === 'number' && expiresInDays > 0 ? Math.min(expiresInDays, 365) : 7;
-    expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
-  }
+  const days = typeof expiresInDays === 'number' && expiresInDays > 0 ? Math.min(expiresInDays, 365) : 7;
+  expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
 
   const perm: ExternalShareLink['permissionType'] = permissionType === 'Commenter' ? 'Commenter' : 'Viewer';
   const pwPlain = typeof password === 'string' && password.trim() ? password.trim() : undefined;
-  const passwordHash = (requiresPassword || pwPlain) && pwPlain ? sha256Hex(pwPlain) : undefined;
+  if ((requiresPassword || doc.confidentialityLevel === 'Confidential') && !pwPlain) {
+    return res.status(400).json({ error: 'A password is required for this secure link.' });
+  }
+  if (pwPlain && (pwPlain.length < 10 || pwPlain.length > 128)) {
+    return res.status(400).json({ error: 'Share-link passwords must be 10 to 128 characters.' });
+  }
+  const normalizedMaxDownloads = maxDownloads == null ? null : Number(maxDownloads);
+  if (normalizedMaxDownloads !== null && (!Number.isInteger(normalizedMaxDownloads) || normalizedMaxDownloads < 1 || normalizedMaxDownloads > 10_000)) {
+    return res.status(400).json({ error: 'Maximum downloads must be an integer from 1 to 10,000.' });
+  }
+  const passwordHash = (requiresPassword || pwPlain) && pwPlain ? hashPassword(pwPlain) : undefined;
 
   const versions = await db().listVersions(docId);
   const latest = latestOf(versions);
@@ -1986,7 +2247,7 @@ app.post('/api/documents/:id/external-link', h(async (req, res) => {
     fileSize: latest?.fileSize || 0,
     fileType: latest?.fileType || 'unknown',
     downloadCount: 0,
-    maxDownloads: maxDownloads ?? null,
+    maxDownloads: normalizedMaxDownloads,
     message: message || undefined,
     allowDownload: allowDownload !== false,
     requiresPassword: Boolean(passwordHash),
@@ -2004,7 +2265,8 @@ app.post('/api/documents/:id/external-link', h(async (req, res) => {
     : typeof recipientEmails === 'string' ? recipientEmails.split(',') : [];
   const validRecipients = recipients
     .map(e => String(e).trim())
-    .filter(e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+    .filter(e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e))
+    .slice(0, 20);
   if (validRecipients.length > 0) {
     const linkUrl = `${requestBaseUrl(req)}/s/${extLink.shortCode}`;
     const mail = externalLinkSharedEmail({
@@ -2066,8 +2328,8 @@ app.post('/api/comments', h(async (req, res) => {
 
   const doc = await db().getDocument(documentId);
   if (!doc) return res.status(404).json({ error: 'Target document was not found.' });
-  if (!(await canViewDocument(user, doc))) {
-    return res.status(403).json({ error: 'You do not have access to this document.' });
+  if (!(await canCommentDocument(user, doc))) {
+    return res.status(403).json({ error: 'Commenter access is required to comment on this document.' });
   }
 
   const newComment: Comment = {
@@ -2243,6 +2505,7 @@ app.get('/api/share/:token', h(async (req, res) => {
 }));
 
 function passwordGateHtml(actionPath: string, wrong: boolean): string {
+  const safeAction = actionPath.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Protected document</title>
 <style>body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
@@ -2251,7 +2514,7 @@ h1{font-size:1.1rem;margin:0 0 .25rem}p{color:#94a3b8;font-size:.85rem;margin:0 
 input{width:100%;box-sizing:border-box;padding:.65rem .8rem;border-radius:9px;border:1px solid #334155;background:#0f172a;color:#fff;font-size:.95rem}
 button{width:100%;margin-top:.8rem;padding:.65rem;border:0;border-radius:9px;background:#6366f1;color:#fff;font-weight:600;font-size:.95rem;cursor:pointer}
 .err{color:#fb7185;font-size:.8rem;margin-top:.6rem}</style></head>
-<body><form class="card" method="GET" action="${actionPath}">
+  <body><form class="card" method="POST" action="${safeAction}">
 <h1>🔒 This document is protected</h1><p>Enter the password to view it.</p>
 <input type="password" name="pw" placeholder="Password" autofocus required>
 <button type="submit">Unlock</button>
@@ -2270,29 +2533,26 @@ async function serveSharedLink(req: express.Request, res: express.Response, link
   }
 
   if (link.requiresPassword && link.passwordHash) {
-    const provided = (typeof req.query.pw === 'string' && req.query.pw)
-      || (typeof req.query.password === 'string' ? req.query.password : '');
-    const providedHash = Buffer.from(provided ? sha256Hex(provided) : '');
-    const expectedHash = Buffer.from(link.passwordHash);
-    const ok = !!provided && providedHash.length === expectedHash.length && crypto.timingSafeEqual(providedHash, expectedHash);
-    if (!ok) {
+    const cookieName = `share_${sha256Hex(link.id).slice(0, 16)}`;
+    const unlocked = verifySession(parseCookies(req)[cookieName] || '') === `share:${link.id}`;
+    if (!unlocked) {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      return res.status(provided ? 401 : 200).send(passwordGateHtml(req.path, Boolean(provided)));
+      return res.status(200).send(passwordGateHtml(`${req.path}/unlock`, req.query.error === '1'));
     }
   }
 
   const doc = await db().getDocument(link.documentId);
   if (!doc || doc.isDeleted) return res.status(404).send('The shared document is no longer available.');
 
-  const linkPatch: Partial<ExternalShareLink> = { accessCount: (link.accessCount || 0) + 1 };
-  if (link.allowDownload !== false) linkPatch.downloadCount = (link.downloadCount || 0) + 1;
-  await db().updateLink(link.id, linkPatch);
+  const consumedLink = await db().consumeExternalLink(link.id, link.allowDownload !== false);
+  if (!consumedLink) return res.status(410).send('This share link is no longer available.');
+  link = consumedLink;
 
   const creator = await db().getUser(link.createdBy);
   await logActivity(
     creator || { id: link.createdBy, fullName: 'External viewer', role: 'Viewer' },
     'External Access', doc.id, doc.title,
-    `Document opened via share link (view #${linkPatch.accessCount}).`
+    `Document opened via share link (view #${link.accessCount}).`
   );
 
   const versions = await db().listVersions(doc.id);
@@ -2316,9 +2576,37 @@ async function serveSharedLink(req: express.Request, res: express.Response, link
   // — an anonymous visitor to a view-only link must never get inline SVG/HTML,
   // which would execute same-origin with no auth required at all.
   const disposition = link.allowDownload === false && isPreviewableInline(full.fileType) ? 'inline' : 'attachment';
-  res.setHeader('Content-Disposition', `${disposition}; filename="${full.fileName}"`);
+  res.setHeader('Content-Disposition', `${disposition}; filename="${safeDownloadName(full.fileName)}"`);
   return res.send(buffer);
 }
+
+async function unlockSharedLink(req: express.Request, res: express.Response, link: ExternalShareLink | null) {
+  if (!link || !link.isActive || !link.requiresPassword || !link.passwordHash) {
+    return res.status(404).send('This protected share link is invalid.');
+  }
+  const rateKey = `share:${link.id}:${requestIp(req)}`;
+  if (await rateLimited(rateKey, 10)) return res.status(429).send('Too many attempts. Try again later.');
+  const provided = String(req.body?.pw || '');
+  const valid = link.passwordHash.startsWith('pbkdf2$')
+    ? verifyPassword(provided, link.passwordHash)
+    : sha256Hex(provided) === link.passwordHash; // legacy links; replaced on next creation
+  if (!valid) return res.redirect(303, `${req.path.replace(/\/unlock$/, '')}?error=1`);
+  if (!link.passwordHash.startsWith('pbkdf2$')) {
+    await db().updateLink(link.id, { passwordHash: hashPassword(provided) });
+  }
+  await clearRateLimit(rateKey);
+  const cookieName = `share_${sha256Hex(link.id).slice(0, 16)}`;
+  setSignedCookie(req, res, cookieName, `share:${link.id}`, 15 * 60 * 1000);
+  return res.redirect(303, req.path.replace(/\/unlock$/, ''));
+}
+
+app.post('/api/external/:token/unlock', h(async (req, res) => {
+  await unlockSharedLink(req, res, await db().getLinkByToken(req.params.token));
+}));
+
+app.post('/s/:code/unlock', h(async (req, res) => {
+  await unlockSharedLink(req, res, await db().getLinkByCode(req.params.code));
+}));
 
 app.get('/api/external/:token', h(async (req, res) => {
   await serveSharedLink(req, res, await db().getLinkByToken(req.params.token));
@@ -2358,11 +2646,11 @@ app.get('/api/documents/:id/download', h(async (req, res) => {
   const content = latest ? await resolveVersionContent(latest) : null;
   if (!content) {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="${doc.title}.txt"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${safeDownloadName(doc.title)}.txt"`);
     return res.send(doc.ocrText || 'No content available for this document.');
   }
   res.setHeader('Content-Type', content.mime);
-  res.setHeader('Content-Disposition', `attachment; filename="${latest!.fileName}"`);
+  res.setHeader('Content-Disposition', `attachment; filename="${safeDownloadName(latest!.fileName)}"`);
   return res.send(content.buffer);
 }));
 
@@ -2394,7 +2682,7 @@ app.get('/api/documents/:id/preview', h(async (req, res) => {
   }
   const canInline = isPreviewableInline(latest.fileType);
   res.setHeader('Content-Type', canInline ? content.mime : 'application/octet-stream');
-  res.setHeader('Content-Disposition', `${canInline ? 'inline' : 'attachment'}; filename="${latest.fileName}"`);
+  res.setHeader('Content-Disposition', `${canInline ? 'inline' : 'attachment'}; filename="${safeDownloadName(latest.fileName)}"`);
   return res.send(content.buffer);
 }));
 
@@ -2417,7 +2705,7 @@ app.get('/api/documents/:id/versions/:versionId/download', h(async (req, res) =>
 
   const buffer = storedFileToBuffer(ver.fileData);
   res.setHeader('Content-Type', mimeForType(ver.fileType));
-  res.setHeader('Content-Disposition', `attachment; filename="${ver.fileName}"`);
+  res.setHeader('Content-Disposition', `attachment; filename="${safeDownloadName(ver.fileName)}"`);
   return res.send(buffer);
 }));
 
@@ -2427,8 +2715,8 @@ app.post('/api/documents/:id/copy', h(async (req, res) => {
   if (!user) return;
   const doc = await db().getDocument(req.params.id);
   if (!doc) return res.status(404).json({ error: 'Document not found.' });
-  if (!(await canViewDocument(user, doc))) {
-    return res.status(403).json({ error: 'You do not have access to this document.' });
+  if (!(await canEditDocument(user, doc))) {
+    return res.status(403).json({ error: 'You need editor access to copy this document.' });
   }
 
   const now = new Date().toISOString();
@@ -2440,7 +2728,7 @@ app.post('/api/documents/:id/copy', h(async (req, res) => {
     ownerId: user.id,
     ownerName: user.fullName,
     status: 'Draft',
-    confidentialityLevel: 'Normal File',
+    confidentialityLevel: doc.confidentialityLevel === 'Confidential' ? 'Confidential' : 'Normal File',
     currentVersion: 'v1',
     isStarred: false,
     isArchived: false,
@@ -2448,21 +2736,37 @@ app.post('/api/documents/:id/copy', h(async (req, res) => {
     createdAt: now,
     updatedAt: now
   };
-  await db().createDocument(copy);
-
   const versions = await db().listVersions(doc.id);
   const latest = latestOf(versions);
-  if (latest) {
-    const full = await db().getVersion(latest.id);
-    await db().createVersion({
-      ...(full || latest),
-      id: newId('ver'),
-      documentId: newDocId,
-      versionNumber: 'v1',
-      uploadedBy: user.id,
-      uploadedByName: user.fullName,
-      createdAt: now
-    });
+  let copiedStoragePath: string | undefined;
+  try {
+    let copiedVersion: DocumentVersion | null = null;
+    if (latest) {
+      const full = await db().getVersion(latest.id);
+      const versionId = newId('ver');
+      if (latest.storagePath) {
+        copiedStoragePath = await copyStoredVersionFile(latest.storagePath, newDocId, versionId, latest.fileName);
+      }
+      copiedVersion = {
+        ...(full || latest),
+        id: versionId,
+        documentId: newDocId,
+        versionNumber: 'v1',
+        uploadedBy: user.id,
+        uploadedByName: user.fullName,
+        storagePath: copiedStoragePath,
+        fileData: copiedStoragePath ? undefined : full?.fileData,
+        createdAt: now
+      };
+    }
+    await db().createDocument(copy);
+    if (copiedVersion) await db().createVersion(copiedVersion);
+  } catch (err) {
+    await db().deleteDocument(newDocId).catch(() => undefined);
+    if (copiedStoragePath && storageEnabled && supabase) {
+      await supabase.storage.from(STORAGE_BUCKET).remove([copiedStoragePath]);
+    }
+    throw err;
   }
 
   await logActivity(user, 'Copy', newDocId, copy.title, `Made a copy of "${doc.title}".`);
@@ -2482,11 +2786,13 @@ async function initRuntime() {
     await withTimeout(store.init(), 15000, 'Datastore init');
   } catch (err) {
     console.error('[startup] Datastore init failed:', (err as Error).message);
-    if (store.kind === 'supabase') {
+    if (store.kind === 'supabase' && process.env.NODE_ENV !== 'production') {
       console.error('[startup] FALLING BACK to a non-durable in-memory store. Apply supabase/migrations and redeploy!');
       storageEnabled = false;
       store = new MemoryStore(isWorkersRuntime ? null : path.join(resolveDataDir(), 'db.json'));
       await store.init();
+    } else {
+      throw err;
     }
   }
 
@@ -2495,12 +2801,16 @@ async function initRuntime() {
   try {
     const admin = (await db().listUsers()).find(u => u.role === 'Admin' && !u.passwordHash);
     if (admin) {
+      if (process.env.NODE_ENV === 'production' && !process.env.INITIAL_ADMIN_PASSWORD) {
+        throw new Error('INITIAL_ADMIN_PASSWORD is required for a fresh production database.');
+      }
       const initial = process.env.INITIAL_ADMIN_PASSWORD || 'ChangeMe!2026';
       await db().updateUser(admin.id, { passwordHash: hashPassword(initial), mustChangePassword: true });
       console.log(`[startup] Set initial password for admin ${admin.email}${process.env.INITIAL_ADMIN_PASSWORD ? ' (from INITIAL_ADMIN_PASSWORD)' : ` — default "ChangeMe!2026", must be changed on first login`}.`);
     }
   } catch (err) {
     console.error('[startup] Admin password bootstrap failed:', (err as Error).message);
+    if (process.env.NODE_ENV === 'production') throw err;
   }
 
   // Prepare object storage and migrate any inline file bytes in the

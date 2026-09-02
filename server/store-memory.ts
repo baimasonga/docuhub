@@ -29,6 +29,7 @@ interface Collections {
   logs: ActivityLog[];
   externalLinks: ExternalShareLink[];
   backupRuns: BackupRun[];
+  documentStars: Array<{ userId: string; documentId: string }>;
 }
 
 const byNewest = (a: { createdAt: string }, b: { createdAt: string }) =>
@@ -41,7 +42,7 @@ export class MemoryStore implements DataStore {
   private db: Collections = {
     users: [], institutions: [], folders: [], documents: [], versions: [],
     permissions: [], approvals: [], comments: [], logs: [], externalLinks: [],
-    backupRuns: []
+    backupRuns: [], documentStars: []
   };
 
   /** filePath === null disables file persistence (Workers, tests). */
@@ -63,11 +64,19 @@ export class MemoryStore implements DataStore {
   }
 
   private seedMissing() {
+    if (!Array.isArray(this.db.documentStars)) this.db.documentStars = [];
     if (this.db.institutions.length === 0) this.db.institutions = structuredClone(DEFAULT_INSTITUTIONS);
     if (this.db.users.length === 0) this.db.users = [structuredClone(DEFAULT_ADMIN)];
     const fallbackInstitutionId = this.db.institutions[0].id;
     for (const user of this.db.users) {
       if (!user.institutionId) user.institutionId = fallbackInstitutionId;
+      if (user.sessionVersion === undefined) user.sessionVersion = 0;
+    }
+    for (const folder of this.db.folders) {
+      if (!folder.institutionId) folder.institutionId = fallbackInstitutionId;
+    }
+    for (const document of this.db.documents) {
+      if (!document.institutionId) document.institutionId = fallbackInstitutionId;
     }
   }
 
@@ -164,7 +173,17 @@ export class MemoryStore implements DataStore {
     const v = this.db.versions.find(x => x.id === id);
     return v ? { ...v } : null;
   }
-  async createVersion(v: DocumentVersion) { this.db.versions.push(v); this.flush(); return v; }
+  async createVersion(v: DocumentVersion) {
+    if (this.db.versions.some(existing =>
+      existing.documentId === v.documentId && existing.versionNumber === v.versionNumber
+    )) {
+      throw new Error('Duplicate document version number.');
+    }
+    if (v.storagePath && this.db.versions.some(existing => existing.storagePath === v.storagePath)) {
+      throw new Error('A storage object cannot be attached to more than one document version.');
+    }
+    this.db.versions.push(v); this.flush(); return v;
+  }
   async updateVersion(id: string, patch: Partial<DocumentVersion>) {
     const v = this.db.versions.find(x => x.id === id);
     if (!v) return;
@@ -180,6 +199,18 @@ export class MemoryStore implements DataStore {
   async listVersionsCreatedSince(sinceIso: string) {
     const since = new Date(sinceIso).getTime();
     return this.db.versions.filter(v => new Date(v.createdAt).getTime() >= since).map(v => ({ ...v }));
+  }
+  async countVersionsWithStoragePath(storagePath: string) {
+    return this.db.versions.filter(v => v.storagePath === storagePath).length;
+  }
+
+  async listStarredDocumentIds(userId: string) {
+    return this.db.documentStars.filter(s => s.userId === userId).map(s => s.documentId);
+  }
+  async setDocumentStar(userId: string, documentId: string, starred: boolean) {
+    this.db.documentStars = this.db.documentStars.filter(s => !(s.userId === userId && s.documentId === documentId));
+    if (starred) this.db.documentStars.push({ userId, documentId });
+    this.flush();
   }
 
   // ---- Permissions ----
@@ -260,6 +291,15 @@ export class MemoryStore implements DataStore {
     if (!l) return;
     Object.assign(l, patch);
     this.flush();
+  }
+  async consumeExternalLink(id: string, countDownload: boolean) {
+    const link = this.db.externalLinks.find(l => l.id === id);
+    if (!link || !link.isActive || new Date(link.expiresAt).getTime() < Date.now()) return null;
+    if (countDownload && link.maxDownloads != null && link.downloadCount >= link.maxDownloads) return null;
+    link.accessCount = (link.accessCount || 0) + 1;
+    if (countDownload) link.downloadCount = (link.downloadCount || 0) + 1;
+    this.flush();
+    return { ...link };
   }
   async listAllLinks() { return this.db.externalLinks.map(l => ({ ...l })); }
 

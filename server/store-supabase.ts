@@ -18,7 +18,7 @@ import {
 } from '../src/types';
 import {
   DataStore, DocumentFilter, StoredUser,
-  DEFAULT_INSTITUTIONS, DEFAULT_ADMIN
+  DEFAULT_INSTITUTIONS, DEFAULT_ADMIN, DEFAULT_INSTITUTION_ID
 } from './store';
 
 // ---- snake_case <-> camelCase row mapping ------------------------------
@@ -33,7 +33,8 @@ const userFromRow = (r: Row): StoredUser => ({
   mustChangePassword: r.must_change_password ?? undefined,
   resetTokenHash: r.reset_token_hash ?? undefined,
   resetTokenExpiresAt: r.reset_token_expires_at ?? undefined,
-  lastLoginAt: r.last_login_at ?? undefined
+  lastLoginAt: r.last_login_at ?? undefined,
+  sessionVersion: Number(r.session_version) || 0
 });
 const userToRow = (u: Partial<StoredUser>): Row => omitUndefined({
   id: u.id, full_name: u.fullName, email: u.email, role: u.role,
@@ -41,7 +42,7 @@ const userToRow = (u: Partial<StoredUser>): Row => omitUndefined({
   institution_id: u.institutionId,
   password_hash: u.passwordHash, must_change_password: u.mustChangePassword,
   reset_token_hash: u.resetTokenHash, reset_token_expires_at: u.resetTokenExpiresAt,
-  last_login_at: u.lastLoginAt
+  last_login_at: u.lastLoginAt, session_version: u.sessionVersion
 });
 // Auth fields that must be explicitly clearable (set to null) when a patch
 // carries them as undefined-meaning-delete is not expressible in JSON.
@@ -58,16 +59,19 @@ const institutionToRow = (i: Partial<Institution>): Row => omitUndefined({
 
 const folderFromRow = (r: Row): Folder => ({
   id: r.id, name: r.name, parentFolderId: r.parent_folder_id,
-  ownerId: r.owner_id, department: r.department ?? undefined, createdAt: r.created_at
+  ownerId: r.owner_id, institutionId: r.institution_id,
+  department: r.department ?? undefined, createdAt: r.created_at
 });
 const folderToRow = (f: Partial<Folder>): Row => omitUndefined({
   id: f.id, name: f.name, parent_folder_id: f.parentFolderId,
-  owner_id: f.ownerId, department: f.department, created_at: f.createdAt
+  owner_id: f.ownerId, institution_id: f.institutionId,
+  department: f.department, created_at: f.createdAt
 });
 
 const documentFromRow = (r: Row): Document => ({
   id: r.id, title: r.title, description: r.description || '',
   ownerId: r.owner_id, ownerName: r.owner_name,
+  institutionId: r.institution_id,
   department: r.department ?? undefined, folderId: r.folder_id,
   documentType: r.document_type, status: r.status,
   confidentialityLevel: r.confidentiality_level, currentVersion: r.current_version,
@@ -82,6 +86,7 @@ const documentToRow = (d: Partial<Document>): Row => {
   const row = omitUndefined({
     id: d.id, title: d.title, description: d.description,
     owner_id: d.ownerId, owner_name: d.ownerName,
+    institution_id: d.institutionId,
     department: d.department, document_type: d.documentType,
     status: d.status, confidentiality_level: d.confidentialityLevel,
     current_version: d.currentVersion, is_starred: d.isStarred,
@@ -202,7 +207,7 @@ function omitUndefined(row: Row): Row {
 // Columns fetched for document lists/details: everything except the heavy
 // ocr_text is still needed by the UI (detail + search preview), so we fetch
 // full rows; file bytes live on document_versions, not here.
-const DOC_COLUMNS = 'id,title,description,owner_id,owner_name,department,folder_id,document_type,status,confidentiality_level,current_version,is_starred,is_archived,is_deleted,tags,ocr_text,created_at,updated_at,last_audited_at,last_audited_by,last_audited_by_name';
+const DOC_COLUMNS = 'id,title,description,owner_id,owner_name,institution_id,department,folder_id,document_type,status,confidentiality_level,current_version,is_starred,is_archived,is_deleted,tags,ocr_text,created_at,updated_at,last_audited_at,last_audited_by,last_audited_by_name';
 // Version metadata without the (potentially huge) inline file_data payload.
 const VERSION_META_COLUMNS = 'id,document_id,file_name,file_size,file_type,version_number,uploaded_by,uploaded_by_name,storage_path,created_at';
 
@@ -248,8 +253,8 @@ export class SupabaseStore implements DataStore {
     };
     await insert('institutions', (blob.institutions || DEFAULT_INSTITUTIONS).map(institutionToRow), 'institutions');
     await insert('dms_users', (blob.users || []).map(userToRow), 'users');
-    await insert('folders', (blob.folders || []).map(folderToRow), 'folders');
-    await insert('documents', (blob.documents || []).map(documentToRow), 'documents');
+    await insert('folders', (blob.folders || []).map(f => folderToRow({ ...f, institutionId: f.institutionId || DEFAULT_INSTITUTION_ID })), 'folders');
+    await insert('documents', (blob.documents || []).map(d => documentToRow({ ...d, institutionId: d.institutionId || DEFAULT_INSTITUTION_ID })), 'documents');
     await insert('document_versions', (blob.versions || []).map(versionToRow), 'versions');
     await insert('share_permissions', (blob.permissions || []).map(permissionToRow), 'permissions');
     await insert('approval_requests', (blob.approvals || []).map(approvalToRow), 'approvals');
@@ -447,6 +452,29 @@ export class SupabaseStore implements DataStore {
         .gte('created_at', sinceIso).order('created_at', { ascending: true }), 'listVersionsCreatedSince');
     return (data as Row[]).map(versionFromRow);
   }
+  async countVersionsWithStoragePath(storagePath: string) {
+    const { count, error } = await this.from('document_versions')
+      .select('id', { count: 'exact', head: true }).eq('storage_path', storagePath);
+    if (error) throw new Error(`[supabase:countVersionsWithStoragePath] ${error.message}`);
+    return count ?? 0;
+  }
+
+  // ---- Per-user stars ----
+  async listStarredDocumentIds(userId: string) {
+    const data = SupabaseStore.unwrap(
+      await this.from('document_stars').select('document_id').eq('user_id', userId), 'listStarredDocumentIds');
+    return (data as Row[]).map(r => String(r.document_id));
+  }
+  async setDocumentStar(userId: string, documentId: string, starred: boolean) {
+    if (starred) {
+      SupabaseStore.unwrap(await this.from('document_stars')
+        .upsert({ user_id: userId, document_id: documentId }, { onConflict: 'user_id,document_id' })
+        .select('document_id'), 'setDocumentStar');
+    } else {
+      SupabaseStore.unwrap(await this.from('document_stars').delete()
+        .eq('user_id', userId).eq('document_id', documentId).select('document_id'), 'unsetDocumentStar');
+    }
+  }
 
   // ---- Permissions ----
   async listPermissionsForDocument(documentId: string) {
@@ -556,6 +584,13 @@ export class SupabaseStore implements DataStore {
   async updateLink(id: string, patch: Partial<ExternalShareLink>) {
     SupabaseStore.unwrap(
       await this.from('external_share_links').update(linkToRow(patch)).eq('id', id).select('id'), 'updateLink');
+  }
+  async consumeExternalLink(id: string, countDownload: boolean) {
+    const data = SupabaseStore.unwrap(
+      await this.supabase.rpc('docuhub_consume_external_link', { p_id: id, p_count_download: countDownload }),
+      'consumeExternalLink');
+    const row = Array.isArray(data) ? data[0] : data;
+    return row ? linkFromRow(row as Row) : null;
   }
   async listAllLinks() {
     const data = SupabaseStore.unwrap(await this.from('external_share_links').select('*'), 'listAllLinks');

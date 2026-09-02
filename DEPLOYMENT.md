@@ -28,10 +28,13 @@ instances).
 ### 1. Supabase
 
 1. Create (or restore) a Supabase project.
-2. Apply the schema: paste `supabase/migrations/0001_relational_schema.sql`
-   into the SQL editor and run it (or `supabase db push` with the CLI), then
-   do the same for `0002_secure_legacy_state_table.sql` and
-   `0003_schema_constraints.sql`, in that order.
+2. Apply every file in `supabase/migrations/` in numeric order (or run
+   `supabase db push` with the CLI). Migration `0006_security_hardening.sql`
+   is required by the current application and adds tenant isolation, revocable
+   sessions, per-user stars, durable rate limiting and atomic link counters.
+   Back up the database first. The migration deliberately stops if it detects
+   duplicate version labels or shared storage paths; repair those records and
+   copy shared objects to independent paths before retrying.
 3. Copy the **Project URL** and the **service_role key** from
    Project Settings → API.
 
@@ -48,13 +51,14 @@ dashboard; Railway: service variables):
 |---|---|---|
 | `SUPABASE_URL` | yes (prod) | `https://<ref>.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | yes (prod) | Server-side only; never expose to clients |
-| `SESSION_SECRET` | recommended | HMAC key for login cookies. Defaults to the service-role key |
-| `INITIAL_ADMIN_PASSWORD` | recommended | First-boot password for the seeded admin. Defaults to `ChangeMe!2026` (a change is forced at first login) |
+| `SESSION_SECRET` | **yes** | Independent random HMAC key of at least 32 characters |
+| `INITIAL_ADMIN_PASSWORD` | first boot | Required only when the database has a seeded Admin without a password; there is no production default |
 | `RESEND_API_KEY` | optional | Enables email (invites, approvals, shares, password resets) via [Resend](https://resend.com). Without it, emails are logged and skipped |
 | `EMAIL_FROM` | optional | Sender, e.g. `DocuHub <docs@yourdomain.com>`. Defaults to Resend's shared onboarding sender |
 | `RESEND_SHARE_TEMPLATE_ID` | optional | When set, share and share-link emails only use this Resend dashboard template instead of the built-in HTML. Other emails are unaffected |
-| `APP_URL` | optional | Base URL used in email links, e.g. `https://docuhub.example.workers.dev`. Defaults to the request host |
-| `GEMINI_API_KEY` | optional | AI OCR/tagging; falls back to local heuristics |
+| `APP_URL` | **yes** | Canonical HTTPS origin used for OAuth, email links and origin validation |
+| `GEMINI_API_KEY` | optional | AI OCR/tagging key; ignored unless external AI is explicitly enabled |
+| `ENABLE_EXTERNAL_AI` | optional | Set to `true` only after institutional approval; default is off |
 | `ALLOWED_EMAIL_DOMAIN` | set (in `wrangler.toml`) | Restrict user emails to one domain. Set to `avdp.org.sl` in `wrangler.toml` `[vars]` -- unset = any valid email |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | optional | Enables "Sign in with Google" (redirect URI: `<APP_URL>/api/auth/oauth/google/callback`). Only works for accounts an Admin already created (matched by email) -- not a self-registration path |
 | `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` | optional | Enables "Sign in with Microsoft" (redirect URI: `<APP_URL>/api/auth/oauth/microsoft/callback`). Same admin-created-accounts-only rule as Google |
@@ -66,8 +70,8 @@ dashboard; Railway: service variables):
 
 ### 3. First login
 
-Sign in with the seeded admin (`mohamedbangura@avdp.org.sl`) and the
-`INITIAL_ADMIN_PASSWORD`. You'll be asked to choose your own password, then
+Sign in with the seeded admin (`mohamedbangura@avdp.org.sl`) and the securely
+configured `INITIAL_ADMIN_PASSWORD`. You must choose your own password before any protected API can be used, then
 create the rest of your users from **User Management** — each new user gets a
 one-time temporary password (shown once, and emailed when email is enabled).
 
@@ -100,8 +104,8 @@ npm run dev        # Express + Vite dev server on :3000 (in-memory store)
 npm test           # API integration tests
 ```
 
-Sign in locally with the seeded admin and `ChangeMe!2026` (or set
-`INITIAL_ADMIN_PASSWORD` in `.env`).
+Sign in locally with the seeded admin and the value of
+`INITIAL_ADMIN_PASSWORD` (the local-only fallback remains `ChangeMe!2026`).
 
 ## Architecture notes
 
@@ -125,8 +129,8 @@ Sign in locally with the seeded admin and `ChangeMe!2026` (or set
 
 ## Remaining limitations
 
-- **Login rate limiting** is per-process/per-isolate; a durable limiter is a
-  SaaS-version item.
-- **Multi-tenancy**: the schema keeps `institution_id` throughout, but the
-  app currently serves a single institution; SaaS-grade tenancy (signup,
-  per-org isolation, billing) is the next milestone.
+- **Malware scanning**: content signatures, file allowlists and size limits are
+  enforced in-process. Highly regulated deployments should additionally place
+  a managed antivirus/content-disarm service in the upload path.
+- **SaaS lifecycle**: tenant data isolation is enforced, but self-service
+  organization signup, billing and tenant administration are not implemented.

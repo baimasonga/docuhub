@@ -15,6 +15,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import type { Server } from 'http';
+import { spawnSync } from 'child_process';
 
 process.env.DOCUHUB_NO_LISTEN = '1';
 process.env.NODE_ENV = 'test';
@@ -76,6 +77,23 @@ test('health endpoint responds without auth', async () => {
   assert.equal(res.status, 200);
   const data = await res.json();
   assert.equal(data.status, 'ok');
+});
+
+test('production refuses to start without durable storage and required secrets', () => {
+  const env = { ...process.env, NODE_ENV: 'production', DOCUHUB_NO_LISTEN: '1' };
+  for (const key of ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_KEY', 'SESSION_SECRET', 'APP_URL']) delete env[key];
+  const result = spawnSync(process.execPath, [
+    '--import', 'tsx', '--input-type=module', '-e',
+    "import('./server.ts').then(m => m.ensureRuntimeReady()).then(() => process.exit(0)).catch(() => process.exit(23))"
+  ], { cwd: process.cwd(), env, encoding: 'utf8' });
+  assert.equal(result.status, 23, `production unexpectedly started: ${result.stdout}\n${result.stderr}`);
+});
+
+test('security migration uses concurrency-safe unique indexes', () => {
+  const sql = fs.readFileSync(path.join(process.cwd(), 'supabase/migrations/0006_security_hardening.sql'), 'utf8');
+  assert.match(sql, /create unique index if not exists document_versions_doc_version_key/i);
+  assert.match(sql, /create unique index if not exists document_versions_storage_path_key/i);
+  assert.doesNotMatch(sql, /create trigger document_versions_no_duplicates/i);
 });
 
 test('protected endpoints reject unauthenticated requests', async () => {
@@ -143,10 +161,18 @@ test('non-admin cannot manage users', async () => {
   const data = await res.json();
   assert.equal(data.mustChangePassword, true);
 
+  const blocked = await api('staff', 'GET', '/api/documents');
+  assert.equal(blocked.status, 403, 'temporary-password sessions must be blocked from protected APIs');
+
   const create = await api('staff', 'POST', '/api/users', {
     fullName: 'X', email: 'x@example.com', role: 'Admin', department: 'IT'
   });
   assert.equal(create.status, 403);
+
+  const changed = await api('staff', 'POST', '/api/auth/change-password', {
+    currentPassword: staffTempPassword, newPassword: 'StaffPermanent9'
+  });
+  assert.equal(changed.status, 200);
 });
 
 let docId = '';
@@ -212,6 +238,59 @@ test('download and preview serve the stored bytes', async () => {
   assert.match(pv.headers.get('content-disposition') || '', /inline/);
 });
 
+test('copies use independent stored content and require editor access', async () => {
+  assert.equal(
+    (await api('staff', 'POST', `/api/documents/${docId}/copy`, {})).status,
+    403,
+    'a viewer share must not grant copy permission'
+  );
+
+  const copied = await api('admin', 'POST', `/api/documents/${docId}/copy`, {});
+  assert.equal(copied.status, 201);
+  const copiedId = (await copied.json()).document.id;
+  assert.match(await (await api('admin', 'GET', `/api/documents/${copiedId}/download`)).text(), /Total amount due/);
+
+  assert.equal((await api('admin', 'POST', `/api/documents/${copiedId}/delete`, {})).status, 200);
+  assert.equal((await api('admin', 'POST', `/api/documents/${copiedId}/permanently-delete`, {})).status, 200);
+  const original = await api('admin', 'GET', `/api/documents/${docId}/download`);
+  assert.equal(original.status, 200, 'purging a copy must not delete the original content');
+  assert.match(await original.text(), /Total amount due/);
+});
+
+test('Commenter shares can comment but Viewer shares cannot', async () => {
+  const denied = await api('staff', 'POST', '/api/comments', {
+    documentId: docId, text: 'Viewer should not be able to comment.'
+  });
+  assert.equal(denied.status, 403);
+
+  const share = await api('admin', 'POST', `/api/documents/${docId}/share`, {
+    targetUserId: staffId, permissionType: 'Commenter'
+  });
+  assert.equal(share.status, 200);
+  const allowed = await api('staff', 'POST', '/api/comments', {
+    documentId: docId, text: 'Commenter access works.'
+  });
+  assert.equal(allowed.status, 200);
+});
+
+test('concurrent version uploads never create duplicate version numbers', async () => {
+  const content = Buffer.from('INVOICE\nTotal amount due: $1,250\nConcurrent revision.').toString('base64');
+  const payload = {
+    fileName: 'vendor_invoice_revision.txt', fileType: 'text/plain',
+    fileSize: 56, fileData: content
+  };
+  const responses = await Promise.all([
+    api('admin', 'POST', `/api/documents/${docId}/version`, payload),
+    api('admin', 'POST', `/api/documents/${docId}/version`, payload)
+  ]);
+  const statuses = responses.map(r => r.status);
+  assert.ok(statuses.every(status => status === 200 || status === 409));
+  assert.ok(statuses.includes(200));
+  const detail = await (await api('admin', 'GET', `/api/documents/${docId}`)).json();
+  const labels = detail.versions.map((version: any) => version.versionNumber);
+  assert.equal(new Set(labels).size, labels.length, 'version labels must remain unique');
+});
+
 test('approval flow: request, decide, status cascades', async () => {
   const req = await api('admin', 'POST', `/api/documents/${docId}/request-approval`, {
     approverId: 'admin-1', comment: 'Please review'
@@ -230,6 +309,11 @@ test('approval flow: request, decide, status cascades', async () => {
   const decided = await decide.json();
   assert.equal(decided.document.status, 'Approved');
   assert.equal(decided.document.confidentialityLevel, 'Official Record');
+
+  const repeat = await api('admin', 'POST', `/api/approvals/${approval.id}/decide`, {
+    status: 'Rejected', comment: 'Second decision'
+  });
+  assert.equal(repeat.status, 409, 'an approval may only be decided once');
 });
 
 test('external share link: public metadata, short-code serving, revoke', async () => {
@@ -254,9 +338,92 @@ test('external share link: public metadata, short-code serving, revoke', async (
   assert.equal(gone.status, 403);
 });
 
+test('external link download limits are enforced atomically', async () => {
+  const create = await api('admin', 'POST', `/api/documents/${docId}/external-link`, {
+    expiresInDays: 7, allowDownload: true, maxDownloads: 1
+  });
+  assert.equal(create.status, 200);
+  const { link } = await create.json();
+
+  assert.equal((await api(null, 'GET', `/s/${link.shortCode}`)).status, 200);
+  assert.equal((await api(null, 'GET', `/s/${link.shortCode}`)).status, 410);
+});
+
+test('security validation rejects active content and invalid permissions', async () => {
+  const activeContent = Buffer.from('<script>alert(1)</script>').toString('base64');
+  const upload = await api('admin', 'POST', '/api/documents/upload', {
+    title: 'Unsafe HTML', fileName: 'unsafe.html', fileType: 'text/html',
+    fileSize: 25, fileData: activeContent, autoFile: false, folderId: null
+  });
+  assert.equal(upload.status, 400);
+
+  const permission = await api('admin', 'POST', `/api/documents/${docId}/share`, {
+    targetUserId: staffId, permissionType: 'Owner'
+  });
+  assert.equal(permission.status, 400);
+
+  const approver = await api('admin', 'POST', `/api/documents/${docId}/request-approval`, {
+    approverId: staffId, comment: 'Invalid approver'
+  });
+  assert.equal(approver.status, 400);
+});
+
+test('confidential classification requires explicit access and revokes links', async () => {
+  const managerCreated = await api('admin', 'POST', '/api/users', {
+    fullName: 'Unshared Manager', email: 'manager@example.com', role: 'Manager', department: 'Finance'
+  });
+  assert.equal(managerCreated.status, 201);
+  const manager = await managerCreated.json();
+  await login('manager', manager.email, manager.tempPassword);
+  assert.equal((await api('manager', 'POST', '/api/auth/change-password', {
+    currentPassword: manager.tempPassword, newPassword: 'ManagerPermanent9'
+  })).status, 200);
+
+  const created = await api('admin', 'POST', '/api/users', {
+    fullName: 'Procurement Viewer', email: 'viewer@example.com', role: 'Viewer', department: 'Procurement'
+  });
+  assert.equal(created.status, 201);
+  const viewer = await created.json();
+  await login('viewer', viewer.email, viewer.tempPassword);
+  const changed = await api('viewer', 'POST', '/api/auth/change-password', {
+    currentPassword: viewer.tempPassword, newPassword: 'ViewerPermanent9'
+  });
+  assert.equal(changed.status, 200);
+
+  const before = await api('viewer', 'GET', `/api/documents/${docId}`);
+  assert.equal(before.status, 200, 'approved same-department document is initially visible');
+
+  const liveLinkResponse = await api('admin', 'POST', `/api/documents/${docId}/external-link`, { expiresInDays: 7 });
+  assert.equal(liveLinkResponse.status, 200);
+  const liveLink = (await liveLinkResponse.json()).link;
+
+  const classified = await api('admin', 'POST', `/api/documents/${docId}/classification`, {
+    confidentialityLevel: 'Confidential'
+  });
+  assert.equal(classified.status, 200);
+  const managerDeclassify = await api('manager', 'POST', `/api/documents/${docId}/classification`, {
+    confidentialityLevel: 'Normal File'
+  });
+  assert.equal(managerDeclassify.status, 403, 'an unshared Manager must not declassify a confidential document');
+  assert.equal((await api('viewer', 'GET', `/api/documents/${docId}`)).status, 403);
+  assert.equal((await api(null, 'GET', `/s/${liveLink.shortCode}`)).status, 403, 'classification revokes external links');
+  assert.equal((await api('viewer', 'POST', `/api/documents/${docId}/copy`, {})).status, 403);
+
+  const share = await api('admin', 'POST', `/api/documents/${docId}/share`, {
+    targetUserId: viewer.id, permissionType: 'Viewer'
+  });
+  assert.equal(share.status, 200);
+  assert.equal((await api('viewer', 'GET', `/api/documents/${docId}`)).status, 200);
+
+  const star = await api('admin', 'POST', `/api/documents/${docId}/star`, {});
+  assert.equal(star.status, 200);
+  const viewerDetail = await (await api('viewer', 'GET', `/api/documents/${docId}`)).json();
+  assert.equal(viewerDetail.document.isStarred, false, 'stars are personal, not global');
+});
+
 test('password-protected link gates content until the password is supplied', async () => {
   const create = await api('admin', 'POST', `/api/documents/${docId}/external-link`, {
-    expiresInDays: 7, requiresPassword: true, password: 'hunter22'
+    expiresInDays: 7, requiresPassword: true, password: 'hunter2200'
   });
   const { link } = await create.json();
   assert.equal(link.hasPassword, true);
@@ -265,10 +432,21 @@ test('password-protected link gates content until the password is supplied', asy
   assert.equal(gate.status, 200);
   assert.match(await gate.text(), /protected/i);
 
-  const wrong = await api(null, 'GET', `/s/${link.shortCode}?pw=nope`);
-  assert.equal(wrong.status, 401);
+  const wrong = await fetch(`${baseUrl}/s/${link.shortCode}/unlock`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ pw: 'nope' }), redirect: 'manual'
+  });
+  assert.equal(wrong.status, 303);
+  assert.ok(!(wrong.headers.get('location') || '').includes('pw='), 'password must never be placed in a URL');
 
-  const right = await api(null, 'GET', `/s/${link.shortCode}?pw=hunter22`);
+  const unlock = await fetch(`${baseUrl}/s/${link.shortCode}/unlock`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ pw: 'hunter2200' }), redirect: 'manual'
+  });
+  assert.equal(unlock.status, 303);
+  const shareCookie = (unlock.headers.get('set-cookie') || '').split(';')[0];
+  assert.ok(shareCookie.startsWith('share_'));
+  const right = await fetch(`${baseUrl}/s/${link.shortCode}`, { headers: { Cookie: shareCookie }, redirect: 'manual' });
   assert.equal(right.status, 200);
   assert.match(await right.text(), /Total amount due/);
 });
@@ -278,6 +456,9 @@ test('admin reset issues a fresh temp password and invalidates the old one', asy
   assert.equal(res.status, 200);
   const { tempPassword } = await res.json();
   assert.ok(tempPassword && tempPassword !== staffTempPassword);
+
+  const invalidated = await api('staff', 'GET', '/api/documents');
+  assert.equal(invalidated.status, 401, 'admin reset must invalidate existing sessions');
 
   jars.delete('staff');
   const oldLogin = await login('staff', staffEmail, staffTempPassword);

@@ -9,6 +9,8 @@
  * this app's admin-invite-only account model.
  */
 
+import { createRemoteJWKSet, jwtVerify } from 'jose';
+
 export type OAuthProvider = 'google' | 'microsoft';
 
 interface ProviderConfig {
@@ -51,38 +53,30 @@ export function isProviderConfigured(provider: OAuthProvider): boolean {
   return Boolean(c.clientId && c.clientSecret);
 }
 
-export function buildAuthorizeUrl(provider: OAuthProvider, redirectUri: string, state: string): string {
+export function buildAuthorizeUrl(provider: OAuthProvider, redirectUri: string, state: string, nonce: string, codeChallenge: string): string {
   const c = providerConfig(provider);
   const params = new URLSearchParams({
     client_id: c.clientId || '',
     redirect_uri: redirectUri,
     response_type: 'code',
     scope: c.scope,
-    state
+    state,
+    nonce,
+    code_challenge: codeChallenge,
+    code_challenge_method: 'S256'
   });
   return `${c.authUrl}?${params.toString()}`;
 }
 
-// Decode (not verify-by-signature) a JWT payload. Safe here specifically
-// because this token is never handled by the browser or any untrusted
-// party -- it comes back directly from the provider's token endpoint, over
-// TLS, in response to a request WE authenticated with our client_secret.
-// The things a signature check would guard against (a forged/tampered
-// token) require an attacker who could intercept or forge a TLS response
-// from Google/Microsoft's own servers, which is out of scope for a stolen
-// authorization code (those are single-use and redirect_uri-bound, checked
-// by the provider itself). We do still check `aud` and `exp` below.
-function decodeJwtPayload(jwt: string): Record<string, unknown> {
-  const parts = jwt.split('.');
-  if (parts.length !== 3) throw new Error('Malformed id_token.');
-  const json = Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
-  return JSON.parse(json);
-}
+const googleJwks = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
+const microsoftJwks = createRemoteJWKSet(new URL('https://login.microsoftonline.com/common/discovery/v2.0/keys'));
 
 export async function exchangeCodeForProfile(
   provider: OAuthProvider,
   code: string,
-  redirectUri: string
+  redirectUri: string,
+  expectedNonce: string,
+  codeVerifier: string
 ): Promise<{ email: string; name: string } | null> {
   const c = providerConfig(provider);
   if (!c.clientId || !c.clientSecret) return null;
@@ -92,7 +86,8 @@ export async function exchangeCodeForProfile(
     client_secret: c.clientSecret,
     code,
     redirect_uri: redirectUri,
-    grant_type: 'authorization_code'
+    grant_type: 'authorization_code',
+    code_verifier: codeVerifier
   });
 
   let res: Response;
@@ -116,22 +111,27 @@ export async function exchangeCodeForProfile(
 
   let claims: Record<string, unknown>;
   try {
-    claims = decodeJwtPayload(data.id_token);
+    const verified = await jwtVerify(data.id_token, provider === 'google' ? googleJwks : microsoftJwks, {
+      audience: c.clientId,
+      algorithms: ['RS256']
+    });
+    claims = verified.payload;
   } catch (err) {
-    console.error(`[oauth] ${provider} id_token decode failed:`, (err as Error).message);
+    console.error(`[oauth] ${provider} id_token verification failed:`, (err as Error).message);
     return null;
   }
 
-  if (typeof claims.exp === 'number' && Date.now() >= claims.exp * 1000) {
-    console.error(`[oauth] ${provider} id_token already expired.`);
-    return null;
-  }
-  if (typeof claims.aud === 'string' && claims.aud !== c.clientId) {
-    console.error(`[oauth] ${provider} id_token audience mismatch.`);
+  const issuer = String(claims.iss || '');
+  const validIssuer = provider === 'google'
+    ? issuer === 'https://accounts.google.com' || issuer === 'accounts.google.com'
+    : /^https:\/\/login\.microsoftonline\.com\/[0-9a-f-]+\/v2\.0$/i.test(issuer);
+  if (!validIssuer || claims.nonce !== expectedNonce) {
+    console.error(`[oauth] ${provider} issuer/nonce validation failed.`);
     return null;
   }
 
-  const email = String(claims.email || '').trim().toLowerCase();
+  if (provider === 'google' && claims.email_verified !== true) return null;
+  const email = String(claims.email || claims.preferred_username || claims.upn || '').trim().toLowerCase();
   if (!email) return null;
   const name = String(claims.name || email.split('@')[0]);
   return { email, name };
