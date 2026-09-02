@@ -321,6 +321,39 @@ test('concurrent version uploads never create duplicate version numbers', async 
   assert.equal(new Set(labels).size, labels.length, 'version labels must remain unique');
 });
 
+test('rolling back to an earlier version copies it forward without erasing history', async () => {
+  const before = await (await api('admin', 'GET', `/api/documents/${docId}`)).json();
+  const v1 = before.versions.find((v: any) => v.versionNumber === 'v1');
+  assert.ok(v1, 'v1 should still be in the ledger');
+  assert.notEqual(before.document.currentVersion, 'v1', 'a later version is current before the rollback');
+  const v1Body = await (await api('admin', 'GET', `/api/documents/${docId}/versions/${v1.id}/download`)).text();
+
+  const current = before.versions.find((v: any) => v.versionNumber === before.document.currentVersion);
+  const alreadyCurrent = await api('admin', 'POST', `/api/documents/${docId}/versions/${current.id}/restore`, {});
+  assert.equal(alreadyCurrent.status, 400, 'restoring the current version is a no-op, not a new version');
+  const missing = await api('admin', 'POST', `/api/documents/${docId}/versions/ver-does-not-exist/restore`, {});
+  assert.equal(missing.status, 404);
+
+  const restore = await api('admin', 'POST', `/api/documents/${docId}/versions/${v1.id}/restore`, {});
+  assert.equal(restore.status, 200);
+  const result = await restore.json();
+  assert.equal(result.restoredFrom, 'v1');
+
+  const after = await (await api('admin', 'GET', `/api/documents/${docId}`)).json();
+  assert.equal(after.document.currentVersion, result.version.versionNumber, 'the copy becomes current');
+  assert.equal(
+    after.versions.length, before.versions.length + 1,
+    'the ledger only grows -- rolling back never deletes a version'
+  );
+  assert.ok(after.versions.some((v: any) => v.versionNumber === 'v1'), 'v1 is still readable after the rollback');
+
+  const restoredBody = await (await api('admin', 'GET', `/api/documents/${docId}/versions/${result.version.id}/download`)).text();
+  assert.equal(restoredBody, v1Body, 'the new version serves the restored content');
+
+  const staffRestore = await api('staff', 'POST', `/api/documents/${docId}/versions/${v1.id}/restore`, {});
+  assert.equal(staffRestore.status, 403, 'a Viewer share must not roll versions back');
+});
+
 test('approval flow: request, decide, status cascades', async () => {
   const req = await api('admin', 'POST', `/api/documents/${docId}/request-approval`, {
     approverId: 'admin-1', comment: 'Please review'

@@ -1955,6 +1955,69 @@ app.post('/api/documents/:id/version', h(async (req, res) => {
   }
 }));
 
+// Roll a document back to an earlier version. The version ledger stays
+// append-only: restoring vN copies its content forward as a brand-new version
+// rather than deleting anything, so the history of what was current when is
+// never rewritten.
+app.post('/api/documents/:id/versions/:versionId/restore', h(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+  const docId = req.params.id;
+
+  const doc = await db().getDocument(docId);
+  if (!doc) return res.status(404).json({ error: 'Document not found.' });
+  if (!(await canEditDocument(user, doc))) {
+    return res.status(403).json({ error: 'You do not have permission to restore versions of this document.' });
+  }
+  if (doc.isDeleted) return res.status(400).json({ error: 'Restore the document from Trash before rolling back a version.' });
+
+  const source = await db().getVersion(req.params.versionId);
+  if (!source || source.documentId !== docId) return res.status(404).json({ error: 'Version not found.' });
+  if (source.versionNumber === doc.currentVersion) {
+    return res.status(400).json({ error: `${source.versionNumber} is already the current version.` });
+  }
+
+  const currentVerNum = parseInt(doc.currentVersion.replace('v', '')) || 1;
+  const nextVerStr = `v${currentVerNum + 1}`;
+  const now = new Date().toISOString();
+  const versionId = newId('ver');
+
+  // A copied object needs its own storage path: storage_path carries a unique
+  // index, so two versions can never point at the same object.
+  let copiedStoragePath: string | undefined;
+  try {
+    if (source.storagePath) {
+      copiedStoragePath = await copyStoredVersionFile(source.storagePath, docId, versionId, source.fileName);
+    }
+    const restored: DocumentVersion = {
+      ...source,
+      id: versionId,
+      versionNumber: nextVerStr,
+      uploadedBy: user.id,
+      uploadedByName: user.fullName,
+      storagePath: copiedStoragePath,
+      fileData: copiedStoragePath ? undefined : source.fileData,
+      createdAt: now
+    };
+    await db().createVersion(restored);
+
+    const updatedDoc = await db().updateDocument(docId, { currentVersion: nextVerStr, updatedAt: now });
+    await logActivity(
+      user, 'Restore Version', docId, doc.title,
+      `Rolled back to ${source.versionNumber} ("${source.fileName}"), recorded as ${nextVerStr}.`
+    );
+    res.json({ success: true, document: updatedDoc, version: restored, restoredFrom: source.versionNumber });
+  } catch (err: any) {
+    if (copiedStoragePath && storageEnabled && supabase) {
+      await supabase.storage.from(STORAGE_BUCKET).remove([copiedStoragePath]).catch(() => undefined);
+    }
+    if (/duplicate document version|duplicate key value|document_versions_doc_version_key|document_versions_storage_path_key/i.test(String(err?.message || ''))) {
+      return res.status(409).json({ error: 'Another version was added while restoring. Refresh and try again.' });
+    }
+    res.status(500).json({ error: 'Version restore failed.', details: err.message });
+  }
+}));
+
 // Star / unstar
 app.post('/api/documents/:id/star', h(async (req, res) => {
   const user = await requireUser(req, res);

@@ -1381,6 +1381,25 @@ export default function App() {
       .catch(() => triggerToast('Could not revoke access.', 'error'));
   };
 
+  const handleRestoreVersion = (versionId: string, versionNumber: string) => {
+    if (!selectedDocId) return;
+    if (!window.confirm(
+      `Roll this document back to ${versionNumber}? Its content is copied forward as a new version — nothing in the ledger is erased.`
+    )) return;
+    fetch(`/api/documents/${selectedDocId}/versions/${versionId}/restore`, { method: 'POST' })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          triggerToast(`Rolled back to ${versionNumber}, saved as ${data.version.versionNumber}.`, 'success');
+          fetchDocDetail(selectedDocId);
+          reloadData();
+        } else {
+          triggerToast(data.error || 'Could not restore that version.', 'error');
+        }
+      })
+      .catch(() => triggerToast('Could not restore that version.', 'error'));
+  };
+
   // Utility calculations for breadcrumb navigation
   const getBreadcrumbs = () => {
     const list = [{ id: 'root', name: 'Folder Cabinets' }];
@@ -1404,9 +1423,10 @@ export default function App() {
   const selectedDocs = documents.filter(doc => selectedIds.has(doc.id));
   const singleSelectedDoc = selectedDocs.length === 1 ? selectedDocs[0] : null;
   const selectionMenuOpen = openMenuId === '__selection-toolbar';
-  // Conservative mirror of the server's canEditDocument() guard on the unshare
-  // route -- the server is still the authority, this only hides a dead button.
-  const canManageSharing = !!currentUser && !!docDetail && (
+  // Conservative mirror of the server's canEditDocument() guard, used to hide
+  // actions that would only 403 (revoking a share, rolling a version back).
+  // The server is still the authority; this just avoids dead buttons.
+  const canManageDocument = !!currentUser && !!docDetail && (
     currentUser.role === 'Admin' ||
     currentUser.role === 'Manager' ||
     docDetail.document.ownerId === currentUser.id
@@ -2765,7 +2785,7 @@ export default function App() {
                               {perm.permissionType} · shared {new Date(perm.createdAt).toLocaleDateString()}
                             </p>
                           </div>
-                          {canManageSharing && (
+                          {canManageDocument && (
                             <button
                               onClick={() => handleRevokeShare(perm.sharedWithUserId, recipientName)}
                               title="Revoke access"
@@ -2871,16 +2891,28 @@ export default function App() {
                       </h5>
                       <p className="text-[8px] text-slate-400 mt-0.5">Uploaded by {ver.uploadedByName} • {(ver.fileSize / 1024).toFixed(1)} KB</p>
                     </div>
-                    <a
-                      href={`/api/documents/${docDetail.document.id}/versions/${ver.id}/download`}
-                      download={ver.fileName}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="p-1.5 bg-white border border-slate-150 hover:bg-slate-50 rounded-lg text-slate-500 hover:text-slate-800 transition-colors"
-                      title="Download file"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                    </a>
+                    <div className="flex items-center space-x-1 shrink-0">
+                      {canManageDocument && ver.versionNumber !== docDetail.document.currentVersion && (
+                        <button
+                          type="button"
+                          onClick={() => handleRestoreVersion(ver.id, ver.versionNumber)}
+                          className="p-1.5 bg-white border border-slate-150 hover:bg-emerald-50 rounded-lg text-slate-500 hover:text-emerald-600 transition-colors"
+                          title={`Roll back to ${ver.versionNumber}`}
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      <a
+                        href={`/api/documents/${docDetail.document.id}/versions/${ver.id}/download`}
+                        download={ver.fileName}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="p-1.5 bg-white border border-slate-150 hover:bg-slate-50 rounded-lg text-slate-500 hover:text-slate-800 transition-colors"
+                        title="Download file"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                      </a>
+                    </div>
                   </div>
                 ))}
               </div>
