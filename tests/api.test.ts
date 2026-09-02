@@ -103,6 +103,36 @@ test('protected endpoints reject unauthenticated requests', async () => {
   }
 });
 
+test('mutating requests are checked against the request origin when APP_URL is unset', async () => {
+  const send = (origin: string) => fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: origin },
+    body: JSON.stringify({ email: 'nobody@avdp.org.sl', password: 'wrong-password' })
+  });
+
+  const foreign = await send('https://evil.example');
+  assert.equal(foreign.status, 403, 'a cross-origin POST must be rejected');
+
+  const own = await send(baseUrl);
+  assert.notEqual(own.status, 403, 'a same-origin POST must pass the origin check');
+});
+
+test('in production the origin is only derived from a workers.dev host', async () => {
+  const { appOrigin } = await import('../server');
+  const asRequest = (host: string) => ({ headers: { host } }) as never;
+  const previous = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  try {
+    assert.equal(appOrigin(asRequest('docuhub.example.workers.dev')), 'https://docuhub.example.workers.dev');
+    assert.equal(appOrigin(asRequest('avdpdocs.org')), null, 'an undeclared host must not be trusted');
+    process.env.APP_URL = 'https://avdpdocs.org';
+    assert.equal(appOrigin(asRequest('docuhub.example.workers.dev')), 'https://avdpdocs.org', 'APP_URL wins when set');
+  } finally {
+    delete process.env.APP_URL;
+    process.env.NODE_ENV = previous;
+  }
+});
+
 test('login rejects bad credentials and accepts the seeded admin', async () => {
   const bad = await login('admin', 'mohamedbangura@avdp.org.sl', 'wrong-password');
   assert.equal(bad.status, 401);

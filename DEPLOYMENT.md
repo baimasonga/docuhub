@@ -64,7 +64,7 @@ dashboard; Railway: service variables):
 | `RESEND_API_KEY` | optional | Enables email (invites, approvals, shares, password resets) via [Resend](https://resend.com). Without it, emails are logged and skipped |
 | `EMAIL_FROM` | optional | Sender, e.g. `DocuHub <docs@yourdomain.com>`. Defaults to Resend's shared onboarding sender |
 | `RESEND_SHARE_TEMPLATE_ID` | optional | When set, share and share-link emails only use this Resend dashboard template instead of the built-in HTML. Other emails are unaffected |
-| `APP_URL` | **yes** | Canonical HTTPS origin used for OAuth, email links and origin validation |
+| `APP_URL` | yes, on a custom domain | Canonical HTTPS origin used for OAuth, email links and origin validation. May be left unset on the temporary `*.workers.dev` hostname, where the server derives it from the request host |
 | `GEMINI_API_KEY` | optional | AI OCR/tagging key; ignored unless external AI is explicitly enabled |
 | `ENABLE_EXTERNAL_AI` | optional | Set to `true` only after institutional approval; default is off |
 | `ALLOWED_EMAIL_DOMAIN` | set (in `wrangler.toml`) | Restrict user emails to one domain. Set to `avdp.org.sl` in `wrangler.toml` `[vars]` -- unset = any valid email |
@@ -103,7 +103,10 @@ observability, and a 30-second CPU safety ceiling).
 
 ### One-time Cloudflare setup
 
-1. Add `avdpdocs.org` to the same Cloudflare account that will own the Worker.
+1. For the temporary deployment nothing needs to be registered -- the Worker
+   is served on its generated `*.workers.dev` hostname. Add `avdpdocs.org` to
+   the same Cloudflare account that will own the Worker once that domain is
+   available.
 2. Subscribe the account to the Workers Standard plan.
 3. In **Workers & Pages**, import `baimasonga/docuhub` as a Worker project and
    select the `main` production branch.
@@ -113,11 +116,13 @@ observability, and a 30-second CPU safety ceiling).
    validation or deployment.
 5. Add the required secrets under the Worker's **Settings → Variables and
    Secrets**. Keep the existing non-secret values from `wrangler.toml`.
-6. For the temporary deployment, record the generated
-   `https://docuhub.<account>.workers.dev` URL from the first successful build.
-   Update `APP_URL` in `wrangler.toml` to that exact URL and redeploy before
-   testing authentication. When `avdpdocs.org` is later added to Cloudflare,
-   restore it as a custom domain and set `APP_URL=https://avdpdocs.org`.
+6. Record the generated `https://docuhub.<account>.workers.dev` URL from the
+   first successful build -- that is the address to test against. `APP_URL` is
+   deliberately unset in `wrangler.toml` for this temporary deployment, so no
+   redeploy is needed to make login work. When `avdpdocs.org` is later added to
+   Cloudflare, restore the `[[routes]]` custom-domain entry, set
+   `APP_URL = "https://avdpdocs.org"` and redeploy: a custom domain is only
+   served once `APP_URL` names it.
 
 Required production secrets:
 
@@ -153,7 +158,8 @@ before merge.
 After deployment, verify:
 
 ```bash
-curl --fail --show-error https://avdpdocs.org/api/health
+# Temporary deployment; use https://avdpdocs.org once the custom domain is live.
+curl --fail --show-error https://docuhub.<account>.workers.dev/api/health
 ```
 
 Then test login/logout, forced password change, upload and preview, version

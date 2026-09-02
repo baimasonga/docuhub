@@ -50,10 +50,14 @@ crons = ["0 2 * * *"]
 
 [vars]
 NODE_ENV = "production"
-# Temporary value until the first workers.dev deployment reveals the account
-# subdomain. Replace this with the exact https://docuhub.<account>.workers.dev
-# URL in a follow-up deployment before production login testing.
-APP_URL = "https://avdpdocs.org"
+# APP_URL is intentionally unset while DocuHub runs on the temporary
+# https://docuhub.<account>.workers.dev hostname: the account subdomain is not
+# known until the first deployment, and a stale value here breaks the origin
+# check and every generated link (OAuth callback, password reset, invites,
+# share links). With it unset the server derives the origin from the request
+# host, which it only trusts for *.workers.dev (see appOrigin() in server.ts).
+# Set APP_URL = "https://avdpdocs.org" again together with the [[routes]]
+# custom-domain entry when that domain is added to Cloudflare.
 # The project URL is public information (it's visible to every client);
 # only the service-role key must stay a secret.
 SUPABASE_URL = "https://vwpibqvwzvqccoqceumv.supabase.co"

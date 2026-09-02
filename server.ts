@@ -90,8 +90,9 @@ app.use((req, res, next) => {
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
   const origin = req.headers.origin;
   if (!origin) return next();
+  const expected = appOrigin(req);
+  if (!expected) return res.status(403).json({ error: 'Invalid request origin.' });
   try {
-    const expected = new URL(process.env.APP_URL || `${req.protocol}://${req.headers.host}`).origin;
     if (new URL(origin).origin !== expected) return res.status(403).json({ error: 'Cross-origin request rejected.' });
   } catch {
     return res.status(403).json({ error: 'Invalid request origin.' });
@@ -132,10 +133,17 @@ function createStoreFromEnv(): DataStore {
     if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
       throw new Error('SESSION_SECRET (at least 32 characters) is required in production.');
     }
-    try {
-      if (!process.env.APP_URL || new URL(process.env.APP_URL).protocol !== 'https:') throw new Error();
-    } catch {
-      throw new Error('APP_URL must be a valid HTTPS URL in production.');
+    if (process.env.APP_URL) {
+      try {
+        if (new URL(process.env.APP_URL).protocol !== 'https:') throw new Error();
+      } catch {
+        throw new Error('APP_URL must be a valid HTTPS URL in production.');
+      }
+    } else {
+      console.warn(
+        '[startup] APP_URL is not set. Absolute links and the origin check fall back to the request ' +
+        `host, which is only accepted on *${HOST_DERIVED_ORIGIN_SUFFIX}. Pin APP_URL before serving a custom domain.`
+      );
     }
   }
   const url = process.env.SUPABASE_URL;
@@ -530,10 +538,43 @@ async function logActivity(user: Pick<User, 'id' | 'fullName' | 'role'>, action:
   }
 }
 
+// Hostname suffix the app is allowed to serve itself on when APP_URL is not
+// pinned. Cloudflare only routes a request to this Worker when the hostname is
+// one of ours, so a *.workers.dev Host header cannot be spoofed by a third
+// party. Any other production hostname must be declared through APP_URL --
+// otherwise a forged Host header could poison the reset/invite/share links
+// built from it.
+const HOST_DERIVED_ORIGIN_SUFFIX = '.workers.dev';
+
+/**
+ * Canonical origin for this request: APP_URL when configured, otherwise the
+ * request's own host. Returns null when no origin can be trusted, which callers
+ * translate into a rejected request rather than a guessed URL.
+ */
+export function appOrigin(req: express.Request): string | null {
+  if (process.env.APP_URL) {
+    try {
+      return new URL(process.env.APP_URL).origin;
+    } catch {
+      return null;
+    }
+  }
+  const host = String(req.headers.host || '').split(',')[0].trim();
+  if (!host) return null;
+  const isProduction = process.env.NODE_ENV === 'production';
+  if (isProduction && !host.toLowerCase().split(':')[0].endsWith(HOST_DERIVED_ORIGIN_SUFFIX)) return null;
+  const proto = isProduction
+    ? 'https'
+    : String(req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http')).split(',')[0];
+  try {
+    return new URL(`${proto}://${host}`).origin;
+  } catch {
+    return null;
+  }
+}
+
 function requestBaseUrl(req: express.Request): string {
-  if (process.env.APP_URL) return process.env.APP_URL.replace(/\/$/, '');
-  const proto = String(req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http')).split(',')[0];
-  return `${proto}://${req.headers.host || 'localhost'}`;
+  return appOrigin(req) || `https://${req.headers.host || 'localhost'}`;
 }
 
 function requestIp(req: express.Request): string {
