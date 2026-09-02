@@ -66,6 +66,7 @@ export interface Document {
   isStarred: boolean;
   isArchived: boolean;
   isDeleted: boolean;
+  deletedAt?: string | null; // when it was moved to Trash; drives auto-purge
   tags: string[];
   ocrText?: string; // AI extracted OCR text
   fileName?: string; // latest version file name, added by API responses

@@ -601,15 +601,61 @@ test('logout clears the session', async () => {
 test('trash, restore, and purge lifecycle', async () => {
   const del = await api('admin', 'POST', `/api/documents/${docId}/delete`, {});
   assert.equal(del.status, 200);
+  assert.ok((await del.json()).document.deletedAt, 'the soft delete records when it happened');
 
   const trash = await api('admin', 'GET', '/api/documents?filterType=trash');
   assert.ok((await trash.json()).some((d: any) => d.id === docId));
 
   const restore = await api('admin', 'POST', `/api/documents/${docId}/restore`, {});
   assert.equal(restore.status, 200);
+  assert.equal((await restore.json()).document.deletedAt, null, 'restoring clears the retention clock');
 
   const purge = await api('admin', 'POST', `/api/documents/${docId}/permanently-delete`, {});
   assert.equal(purge.status, 200);
   const gone = await api('admin', 'GET', `/api/documents/${docId}`);
   assert.equal(gone.status, 404);
+});
+
+test('trash retention purges expired documents and leaves everything else', async () => {
+  const { purgeExpiredTrash } = await import('../server');
+
+  const upload = async (title: string) => {
+    const res = await api('admin', 'POST', '/api/documents/upload', {
+      title, description: 'Retention fixture', documentType: 'Report',
+      fileName: `${title.replace(/ /g, '_')}.txt`, fileType: 'text/plain', fileSize: 14,
+      fileData: Buffer.from('retention test').toString('base64')
+    });
+    assert.equal(res.status, 201);
+    return (await res.json()).document.id;
+  };
+
+  const trashedId = await upload('Retention Trashed');
+  const liveId = await upload('Retention Live');
+  assert.equal((await api('admin', 'POST', `/api/documents/${trashedId}/delete`, {})).status, 200);
+
+  const DAY = 86400000;
+  const previous = process.env.TRASH_RETENTION_DAYS;
+  try {
+    process.env.TRASH_RETENTION_DAYS = '0';
+    const disabled = await purgeExpiredTrash(Date.now() + 365 * DAY);
+    assert.equal(disabled.skipped, true, 'TRASH_RETENTION_DAYS=0 disables the sweep entirely');
+    assert.equal((await api('admin', 'GET', `/api/documents/${trashedId}`)).status, 200);
+
+    process.env.TRASH_RETENTION_DAYS = '30';
+    const withinWindow = await purgeExpiredTrash(Date.now() + 29 * DAY);
+    assert.equal(withinWindow.purged, 0, 'trash inside the retention window is untouched');
+    assert.equal((await api('admin', 'GET', `/api/documents/${trashedId}`)).status, 200);
+
+    const expired = await purgeExpiredTrash(Date.now() + 31 * DAY);
+    assert.equal(expired.skipped, false);
+    assert.equal(expired.purged, 1, 'exactly the expired document is purged');
+    assert.equal((await api('admin', 'GET', `/api/documents/${trashedId}`)).status, 404);
+    assert.equal(
+      (await api('admin', 'GET', `/api/documents/${liveId}`)).status, 200,
+      'a document that was never trashed must survive the sweep'
+    );
+  } finally {
+    if (previous === undefined) delete process.env.TRASH_RETENTION_DAYS;
+    else process.env.TRASH_RETENTION_DAYS = previous;
+  }
 });

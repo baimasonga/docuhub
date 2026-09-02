@@ -90,6 +90,8 @@ export interface DataStore {
   updateDocument(id: string, patch: Partial<Document>): Promise<Document | null>;
   /** Hard delete; cascades versions/permissions/approvals/comments/links. */
   deleteDocument(id: string): Promise<void>;
+  /** Trashed documents deleted at/before `cutoffIso` -- drives the retention purge. */
+  listTrashedBefore(cutoffIso: string): Promise<Document[]>;
 
   // Versions (returned newest-first)
   listVersions(documentId: string): Promise<DocumentVersion[]>;

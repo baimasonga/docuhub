@@ -76,6 +76,7 @@ const documentFromRow = (r: Row): Document => ({
   documentType: r.document_type, status: r.status,
   confidentialityLevel: r.confidentiality_level, currentVersion: r.current_version,
   isStarred: r.is_starred, isArchived: r.is_archived, isDeleted: r.is_deleted,
+  deletedAt: r.deleted_at ?? null,
   tags: r.tags || [], ocrText: r.ocr_text ?? undefined,
   createdAt: r.created_at, updatedAt: r.updated_at,
   lastAuditedAt: r.last_audited_at ?? undefined,
@@ -90,7 +91,7 @@ const documentToRow = (d: Partial<Document>): Row => {
     department: d.department, document_type: d.documentType,
     status: d.status, confidentiality_level: d.confidentialityLevel,
     current_version: d.currentVersion, is_starred: d.isStarred,
-    is_archived: d.isArchived, is_deleted: d.isDeleted,
+    is_archived: d.isArchived, is_deleted: d.isDeleted, deleted_at: d.deletedAt,
     tags: d.tags, ocr_text: d.ocrText,
     created_at: d.createdAt, updated_at: d.updatedAt,
     last_audited_at: d.lastAuditedAt, last_audited_by: d.lastAuditedBy,
@@ -207,7 +208,7 @@ function omitUndefined(row: Row): Row {
 // Columns fetched for document lists/details: everything except the heavy
 // ocr_text is still needed by the UI (detail + search preview), so we fetch
 // full rows; file bytes live on document_versions, not here.
-const DOC_COLUMNS = 'id,title,description,owner_id,owner_name,institution_id,department,folder_id,document_type,status,confidentiality_level,current_version,is_starred,is_archived,is_deleted,tags,ocr_text,created_at,updated_at,last_audited_at,last_audited_by,last_audited_by_name';
+const DOC_COLUMNS = 'id,title,description,owner_id,owner_name,institution_id,department,folder_id,document_type,status,confidentiality_level,current_version,is_starred,is_archived,is_deleted,deleted_at,tags,ocr_text,created_at,updated_at,last_audited_at,last_audited_by,last_audited_by_name';
 // Version metadata without the (potentially huge) inline file_data payload.
 const VERSION_META_COLUMNS = 'id,document_id,file_name,file_size,file_type,version_number,uploaded_by,uploaded_by_name,storage_path,created_at';
 
@@ -406,6 +407,13 @@ export class SupabaseStore implements DataStore {
     const data = SupabaseStore.unwrap(
       await this.from('documents').update(documentToRow(patch)).eq('id', id).select(DOC_COLUMNS).maybeSingle(), 'updateDocument');
     return data ? documentFromRow(data as Row) : null;
+  }
+  async listTrashedBefore(cutoffIso: string) {
+    const data = SupabaseStore.unwrap(
+      await this.from('documents').select(DOC_COLUMNS)
+        .eq('is_deleted', true).not('deleted_at', 'is', null).lte('deleted_at', cutoffIso),
+      'listTrashedBefore');
+    return (data as Row[]).map(documentFromRow);
   }
   async deleteDocument(id: string) {
     // Child tables cascade via foreign keys.

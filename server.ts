@@ -519,6 +519,34 @@ async function attachLatestFileMetadata(docs: Document[]): Promise<Document[]> {
   return docs.map(d => withFileMetadata(d, latestByDoc.get(d.id)));
 }
 
+// Audit-trail author for unattended work (the nightly retention purge). The
+// activity log has no foreign key to dms_users, so a non-user id is safe here
+// and keeps automated deletions visibly distinct from anything a person did.
+const SYSTEM_ACTOR = { id: 'system', fullName: 'DocuHub (scheduled task)', role: 'Admin' as const };
+
+// Hard-delete a document and the Storage objects only it referenced. Shared by
+// the manual purge route and the nightly retention job.
+async function purgeDocumentCompletely(doc: Document): Promise<void> {
+  // Grab Storage object paths before the DB rows (and their storagePath
+  // columns) disappear via FK cascade.
+  const versions = await db().listVersions(doc.id);
+  const storagePaths = versions.map(v => v.storagePath).filter((p): p is string => Boolean(p));
+  const exclusivelyOwnedPaths: string[] = [];
+  for (const storagePath of storagePaths) {
+    if (await db().countVersionsWithStoragePath(storagePath) === 1) exclusivelyOwnedPaths.push(storagePath);
+  }
+
+  await db().deleteDocument(doc.id);
+
+  // Best-effort: the document is already gone from the app's perspective
+  // either way. A failure here just leaves an orphaned (harmless, invisible)
+  // Storage object rather than blocking the purge.
+  if (exclusivelyOwnedPaths.length > 0 && storageEnabled && supabase) {
+    const { error } = await supabase.storage.from(STORAGE_BUCKET).remove(exclusivelyOwnedPaths);
+    if (error) console.error('[storage] cleanup failed for purged document', doc.id, error.message);
+  }
+}
+
 async function logActivity(user: Pick<User, 'id' | 'fullName' | 'role'>, action: string, docId?: string, docTitle?: string, details = '') {
   const entry: ActivityLog = {
     id: `log-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
@@ -1190,7 +1218,9 @@ app.get('/api/session', h(async (req, res) => {
   const user = await getUserFromRequest(req);
   res.json({
     user: user ? publicUser(user) : null,
-    mustChangePassword: Boolean(user?.mustChangePassword)
+    mustChangePassword: Boolean(user?.mustChangePassword),
+    // 0 means Trash never auto-purges; the UI uses this to explain the wait.
+    trashRetentionDays: trashRetentionDays()
   });
 }));
 
@@ -2047,8 +2077,12 @@ app.post('/api/documents/:id/delete', h(async (req, res) => {
     return res.status(403).json({ error: 'You do not have permission to delete this document.' });
   }
 
-  const updated = await db().updateDocument(doc.id, { isDeleted: true });
-  await logActivity(user, 'Delete', doc.id, doc.title, 'Soft-deleted the file and moved to Trash directory.');
+  const updated = await db().updateDocument(doc.id, { isDeleted: true, deletedAt: new Date().toISOString() });
+  const retentionDays = trashRetentionDays();
+  await logActivity(
+    user, 'Delete', doc.id, doc.title,
+    `Soft-deleted the file and moved to Trash directory.${retentionDays > 0 ? ` Auto-purges after ${retentionDays} day(s) unless restored.` : ''}`
+  );
   res.json({ success: true, document: updated });
 }));
 
@@ -2062,7 +2096,7 @@ app.post('/api/documents/:id/restore', h(async (req, res) => {
     return res.status(403).json({ error: 'You do not have permission to restore this document.' });
   }
 
-  const updated = await db().updateDocument(doc.id, { isDeleted: false });
+  const updated = await db().updateDocument(doc.id, { isDeleted: false, deletedAt: null });
   await logActivity(user, 'Restore', doc.id, doc.title, 'Restored file from trash folder back into original directory.');
   res.json({ success: true, document: updated });
 }));
@@ -2077,25 +2111,7 @@ app.post('/api/documents/:id/permanently-delete', h(async (req, res) => {
     return res.status(403).json({ error: 'You do not have permission to purge this document.' });
   }
 
-  // Grab Storage object paths before the DB rows (and their storagePath
-  // columns) disappear via FK cascade.
-  const versions = await db().listVersions(doc.id);
-  const storagePaths = versions.map(v => v.storagePath).filter((p): p is string => Boolean(p));
-  const exclusivelyOwnedPaths: string[] = [];
-  for (const storagePath of storagePaths) {
-    if (await db().countVersionsWithStoragePath(storagePath) === 1) exclusivelyOwnedPaths.push(storagePath);
-  }
-
-  await db().deleteDocument(doc.id);
-
-  // Best-effort: the document is already gone from the app's perspective
-  // either way. A failure here just leaves an orphaned (harmless, invisible)
-  // Storage object rather than blocking the purge.
-  if (exclusivelyOwnedPaths.length > 0 && storageEnabled && supabase) {
-    const { error } = await supabase.storage.from(STORAGE_BUCKET).remove(exclusivelyOwnedPaths);
-    if (error) console.error('[storage] cleanup failed for purged document', doc.id, error.message);
-  }
-
+  await purgeDocumentCompletely(doc);
   await logActivity(user, 'Purge Document', doc.id, doc.title, 'Permanently purged document binaries and all historic trace assets.');
   res.json({ success: true });
 }));
@@ -2588,6 +2604,60 @@ app.post('/api/backup/run', h(async (req, res) => {
 
 // Called by worker/index.ts's scheduled() handler (Cron Trigger). Not an
 // HTTP route -- no request/response, just the shared backup logic.
+// How long a soft-deleted document stays recoverable in Trash. 0 (or a
+// negative/…invalid value) disables automatic purging entirely, which is the
+// right setting where a records-retention policy forbids unattended deletion.
+const DEFAULT_TRASH_RETENTION_DAYS = 30;
+
+function trashRetentionDays(): number {
+  const raw = process.env.TRASH_RETENTION_DAYS;
+  if (raw === undefined || raw.trim() === '') return DEFAULT_TRASH_RETENTION_DAYS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    console.warn(`[trash] ignoring invalid TRASH_RETENTION_DAYS="${raw}"; using ${DEFAULT_TRASH_RETENTION_DAYS}.`);
+    return DEFAULT_TRASH_RETENTION_DAYS;
+  }
+  return Math.floor(parsed);
+}
+
+// Purge documents that have sat in Trash past the retention window. Runs from
+// the same nightly trigger as the backup, and deliberately runs *after* it so
+// a document's last night in Trash is still captured in an external backup.
+// `now` is injectable so the retention boundary can be exercised without
+// waiting out a real window.
+export async function purgeExpiredTrash(now: number = Date.now()): Promise<{ purged: number; failed: number; skipped: boolean }> {
+  await ensureRuntimeReady();
+  const retentionDays = trashRetentionDays();
+  if (retentionDays === 0) {
+    console.log('[trash] retention purge disabled (TRASH_RETENTION_DAYS=0).');
+    return { purged: 0, failed: 0, skipped: true };
+  }
+
+  const cutoff = new Date(now - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+  const expired = await db().listTrashedBefore(cutoff);
+  let purged = 0;
+  let failed = 0;
+  for (const doc of expired) {
+    try {
+      await purgeDocumentCompletely(doc);
+      purged++;
+      await logActivity(
+        SYSTEM_ACTOR, 'Purge Document', doc.id, doc.title,
+        `Automatically purged after ${retentionDays} day(s) in Trash (deleted ${doc.deletedAt}).`
+      );
+    } catch (err) {
+      // One bad document must not strand the rest of the sweep; the next run
+      // picks it up again since it stays trashed and expired.
+      failed++;
+      console.error(`[trash] purge failed for document ${doc.id}:`, (err as Error).message);
+    }
+  }
+  if (purged > 0 || failed > 0) {
+    console.log(`[trash] retention purge: ${purged} document(s) removed, ${failed} failed (cutoff ${cutoff}).`);
+  }
+  return { purged, failed, skipped: false };
+}
+
 export async function runScheduledBackup(): Promise<void> {
   await ensureRuntimeReady();
   const target = backupTargetFromEnv(process.env);
@@ -2603,6 +2673,23 @@ export async function runScheduledBackup(): Promise<void> {
     newId
   });
   console.log(`[backup] scheduled run ${run.status}: ${run.filesUploaded} file(s), ${run.bytesUploaded} bytes.${run.error ? ` Error: ${run.error}` : ''}`);
+}
+
+// Everything the nightly trigger does, in order: back up first so a document's
+// last night in Trash is captured externally, then purge what has expired. A
+// backup failure must not skip the purge (or Trash would grow unbounded
+// whenever backups are misconfigured), so the two are reported independently.
+export async function runNightlyMaintenance(): Promise<void> {
+  try {
+    await runScheduledBackup();
+  } catch (err) {
+    console.error('[backup] scheduled run failed:', (err as Error).message);
+  }
+  try {
+    await purgeExpiredTrash();
+  } catch (err) {
+    console.error('[trash] retention purge failed:', (err as Error).message);
+  }
 }
 
 // Node-only equivalent of the Cloudflare Cron Trigger (wrangler.toml
@@ -2621,8 +2708,8 @@ function startNightlyBackupScheduler() {
       const last = await db().getLastSuccessfulBackupRun();
       const today = new Date().toISOString().slice(0, 10);
       if (last && last.startedAt.slice(0, 10) === today) return; // already ran today
-      console.log('[backup] nightly scheduler firing.');
-      await runScheduledBackup();
+      console.log('[maintenance] nightly scheduler firing.');
+      await runNightlyMaintenance();
     } catch (err) {
       console.error('[backup] nightly scheduler tick failed:', err);
     }

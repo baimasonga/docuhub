@@ -4,7 +4,7 @@
 // Everything under /api/* and /s/* is handed to the existing Express app in
 // ../server.ts via Cloudflare's Node HTTP compatibility bridge.
 import { httpServerHandler } from 'cloudflare:node';
-import { ensureRuntimeReady, runScheduledBackup } from '../server';
+import { ensureRuntimeReady, runNightlyMaintenance } from '../server';
 
 interface Env {
   ASSETS: { fetch: (request: Request) => Promise<Response> };
@@ -46,10 +46,11 @@ export default {
   },
 
   // Cron Trigger entry point (see wrangler.toml [triggers]). Runs the same
-  // incremental backup logic as the manual "Back Up Now" button.
+  // incremental backup logic as the manual "Back Up Now" button, then purges
+  // documents that have outlived the Trash retention window.
   async scheduled(_event: ScheduledEvent, _env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(
-      runScheduledBackup().catch(err => console.error('[worker] scheduled backup failed:', err))
+      runNightlyMaintenance().catch(err => console.error('[worker] nightly maintenance failed:', err))
     );
   },
 };

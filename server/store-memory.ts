@@ -168,6 +168,12 @@ export class MemoryStore implements DataStore {
     this.flush();
   }
 
+  async listTrashedBefore(cutoffIso: string) {
+    return this.db.documents
+      .filter(d => d.isDeleted && d.deletedAt && d.deletedAt <= cutoffIso)
+      .map(d => ({ ...d }));
+  }
+
   // ---- Versions ----
   async listVersions(documentId: string) {
     return this.db.versions.filter(v => v.documentId === documentId).sort(byNewest).map(v => ({ ...v }));

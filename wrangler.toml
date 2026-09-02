@@ -42,9 +42,11 @@ not_found_handling = "single-page-application"
 # so isApiPath() always gets to make the /api/* vs static-asset decision.
 run_worker_first = true
 
-# Nightly external backup (see worker/index.ts's scheduled() handler and
-# server/backup.ts). No-ops with a log line if IDRIVE_* secrets below aren't
-# set -- safe to leave enabled even before the feature is configured.
+# Nightly maintenance (see worker/index.ts's scheduled() handler): external
+# backup first (server/backup.ts), then the Trash retention purge. The backup
+# no-ops with a log line if the IDRIVE_* secrets below aren't set -- safe to
+# leave enabled even before the feature is configured. Trash retention defaults
+# to 30 days; set TRASH_RETENTION_DAYS = "0" in [vars] to disable purging.
 [triggers]
 crons = ["0 2 * * *"]
 

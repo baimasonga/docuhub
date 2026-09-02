@@ -231,6 +231,8 @@ export default function App() {
   const [showOcrText, setShowOcrText] = useState(false);
   const [showShareLinks, setShowShareLinks] = useState(false);
   const [showSharedWith, setShowSharedWith] = useState(false);
+  // Days a soft-deleted document stays recoverable; 0 means Trash never expires.
+  const [trashRetentionDays, setTrashRetentionDays] = useState(0);
 
   // Modals visibility triggers
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -329,6 +331,7 @@ export default function App() {
         if (session && session.user) {
           setCurrentUser(session.user);
           setMustChangePassword(Boolean(session.mustChangePassword));
+          if (typeof session.trashRetentionDays === 'number') setTrashRetentionDays(session.trashRetentionDays);
         }
       })
       .catch(err => console.error('[bootstrap] session restore failed:', err))
@@ -1952,6 +1955,16 @@ export default function App() {
                 </div>
               </div>
 
+              {currentView === 'trash' && trashRetentionDays > 0 && (
+                <div className="flex items-start gap-2 rounded-xl border border-amber-100 bg-amber-50/60 px-3 py-2 text-[11px] text-amber-800">
+                  <Trash2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+                  <span>
+                    Items here are permanently deleted {trashRetentionDays} days after they were moved to Trash.
+                    Restore anything you still need.
+                  </span>
+                </div>
+              )}
+
               {/* Subfolders Grid (only if in My Drive) */}
               {currentView === 'my-drive' && folders.filter(f => f.parentFolderId === currentFolderId).length > 0 && (
                 <div className="space-y-2">
@@ -2751,6 +2764,20 @@ export default function App() {
                 default like Extracted Text / File History below -- with several
                 links active this was previously rendering a full detail card per
                 link at all times, dominating the panel. */}
+            {docDetail.document.isDeleted && docDetail.document.deletedAt && (
+              <div className="rounded-xl border border-rose-100 bg-rose-50/60 px-3 py-2 text-[10px] text-rose-700">
+                In Trash since {new Date(docDetail.document.deletedAt).toLocaleDateString()}
+                {trashRetentionDays > 0 && (() => {
+                  const daysLeft = Math.ceil(
+                    (new Date(docDetail.document.deletedAt!).getTime() + trashRetentionDays * 86400000 - Date.now()) / 86400000
+                  );
+                  return daysLeft > 0
+                    ? ` · permanently deleted in ${daysLeft} day${daysLeft === 1 ? '' : 's'}`
+                    : ' · due for permanent deletion on the next nightly sweep';
+                })()}
+              </div>
+            )}
+
             {/* Who inside the institution this document is shared with */}
             {docDetail.permissions.length > 0 && (
               <div className="space-y-2">

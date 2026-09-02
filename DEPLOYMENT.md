@@ -67,6 +67,7 @@ dashboard; Railway: service variables):
 | `APP_URL` | yes, on a custom domain | Canonical HTTPS origin used for OAuth, email links and origin validation. May be left unset on the temporary `*.workers.dev` hostname, where the server derives it from the request host |
 | `GEMINI_API_KEY` | optional | AI OCR/tagging key; ignored unless external AI is explicitly enabled |
 | `ENABLE_EXTERNAL_AI` | optional | Set to `true` only after institutional approval; default is off |
+| `TRASH_RETENTION_DAYS` | optional | Days a soft-deleted document stays recoverable in Trash before the nightly job purges it and its stored files. Defaults to `30`; set to `0` to disable automatic purging where a records-retention policy forbids unattended deletion |
 | `ALLOWED_EMAIL_DOMAIN` | set (in `wrangler.toml`) | Restrict user emails to one domain. Set to `avdp.org.sl` in `wrangler.toml` `[vars]` -- unset = any valid email |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | optional | Enables "Sign in with Google" (redirect URI: `<APP_URL>/api/auth/oauth/google/callback`). Only works for accounts an Admin already created (matched by email) -- not a self-registration path |
 | `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET` | optional | Enables "Sign in with Microsoft" (redirect URI: `<APP_URL>/api/auth/oauth/microsoft/callback`). Same admin-created-accounts-only rule as Google |
@@ -205,6 +206,10 @@ Sign in locally with the seeded admin and the value of
   per-process login rate limiter.
 - **Email**: transactional notifications (invite, approval requested/decided,
   document shared, password reset) via Resend; best-effort with timeouts.
+- **Trash retention**: a soft delete records `deleted_at`; the nightly Cron
+  Trigger purges anything past `TRASH_RETENTION_DAYS` (default 30) together
+  with the Storage objects only it referenced, after the backup step so a
+  document's last night in Trash is still captured externally.
 - **PWA**: installable manifest + a minimal service worker that caches only
   immutable build assets. The upload dialog includes a camera capture path
   for scanning paper documents on phones.
