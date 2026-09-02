@@ -2,6 +2,18 @@ name = "docuhub"
 main = "worker/index.ts"
 compatibility_date = "2026-06-16"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+preview_urls = false
+
+# DocuHub performs password hashing and document metadata processing in the
+# Worker. The Standard (paid) Workers plan provides the required CPU budget;
+# keep an explicit ceiling to contain unexpected usage and cost.
+[limits]
+cpu_ms = 30_000
+
+[observability]
+enabled = true
+head_sampling_rate = 1
 # This is the critical part for custom domains:
 [[routes]]
 pattern = "avdpdocs.org"

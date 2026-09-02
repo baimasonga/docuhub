@@ -12,8 +12,9 @@
     "lint": "tsc --noEmit",
     "build:server": "vite build && esbuild server.ts --bundle --platform=node --format=esm --packages=external --sourcemap --outfile=dist/server.mjs",
     "build:pages": "vite build --outDir dist-pages",
-    "preview:pages": "npm run build:pages && npx wrangler pages dev dist-pages --compatibility-date=2026-06-16",
-    "deploy:pages": "npm run build:pages && npx wrangler pages deploy dist-pages",
+    "dev:worker": "npm run build:pages && npx --yes wrangler@4.128.0 dev",
+    "check:worker": "npm run build:pages && npx --yes wrangler@4.128.0 deploy --dry-run",
+    "deploy:worker": "npm run build:pages && npx --yes wrangler@4.128.0 deploy",
     "test": "node --import tsx --test tests/api.test.ts"
   },
   "engines": {

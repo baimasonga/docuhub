@@ -7,7 +7,8 @@ DocuHub is the AVDP document-management system. It provides controlled document 
 - React 19 and Vite frontend
 - Express and TypeScript API
 - Supabase Postgres and private Supabase Storage in production
-- Cloudflare Workers deployment, with Railway/Node supported as an alternative
+- Cloudflare Workers Standard deployment (frontend, API and scheduled backups)
+- Railway/Node retained only as an optional recovery target
 - Optional Resend email, OAuth, Gemini-assisted OCR, and S3-compatible backup
 
 Production fails closed when its database or required secrets are unavailable. It never falls back to temporary in-memory data.
@@ -27,6 +28,7 @@ Local development uses `data/db.json` when Supabase is not configured. Copy `.en
 npm run lint
 node --import tsx --test tests/api.test.ts
 npm run build
+npm run check:worker
 npm audit --audit-level=high
 ```
 

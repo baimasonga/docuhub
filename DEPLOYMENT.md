@@ -1,12 +1,19 @@
 # Deploying AVDP Document Management System
 
 AVDP Document Management System is a single Express server (`server.ts`) that
-serves both the API and the compiled React SPA. It runs in two environments:
+serves both the API and the compiled React SPA. The primary production target
+is **Cloudflare Workers Standard (paid)**:
 
-- **Cloudflare Workers** (current production): `worker/index.ts` bridges
+- **Cloudflare Workers Standard**: `worker/index.ts` bridges
   requests into the Express app via `cloudflare:node`; static SPA assets are
   served from the Workers ASSETS binding (`dist-pages`).
-- **Plain node** (Railway or any container host): `node dist/server.mjs`.
+- **Plain node** (Railway or any container host) is retained only as an
+  optional recovery target: `node dist/server.mjs`.
+
+Do not create a Cloudflare Pages project for this repository. Pages can host
+the static React build, but DocuHub also needs a stateful API execution path,
+Node compatibility, and a nightly Cron Trigger. A single Worker with Static
+Assets provides all three without a second origin or proxy layer.
 
 Data persists to **Supabase Postgres** (one table per entity — see
 `supabase/migrations/`) with file binaries in **Supabase Storage**. Without
@@ -20,7 +27,8 @@ instances).
 |------|-------------|
 | `npm run build` | Vite compiles the SPA into `dist/` and `dist-pages/`, esbuild bundles the server into `dist/server.mjs` |
 | `npm start` | Runs `NODE_ENV=production node dist/server.mjs` (node hosting) |
-| `npx wrangler deploy` | Deploys the Worker + static assets (Cloudflare) |
+| `npm run check:worker` | Builds assets and validates a Cloudflare deployment without publishing |
+| `npm run deploy:worker` | Deploys the Worker + static assets to Cloudflare |
 | `npm test` | API integration tests against the in-memory store |
 
 ## One-time setup
@@ -78,16 +86,79 @@ one-time temporary password (shown once, and emailed when email is enabled).
 Users imported from the legacy datastore have no password; use the
 **Reset password** button in User Management to issue them temp passwords.
 
-## Cloudflare Workers (production)
+## Cloudflare Workers Standard (production)
 
 `wrangler.toml` is already configured (Worker entry `worker/index.ts`, assets
-from `dist-pages`, `nodejs_compat`). Deploys run:
+from `dist-pages`, Node compatibility, custom domain, nightly backup trigger,
+observability, and a 30-second CPU safety ceiling).
 
-```bash
-npm run build && npx wrangler deploy
+### Why Standard rather than Free or Pages
+
+| Cloudflare option | Decision | Reason |
+|---|---|---|
+| Workers Standard | **Use this** | Runs the React assets, Express API, security processing and Cron Trigger in one deployment |
+| Workers Free | Do not use for production | The per-request CPU allowance is too small for password hashing and document-processing routes |
+| Pages | Do not use | Static hosting alone cannot run the complete DocuHub backend; a proxy would introduce a second host |
+| Containers | Not currently needed | The application already bundles successfully for Workers and stores durable data/files in Supabase |
+
+### One-time Cloudflare setup
+
+1. Add `avdpdocs.org` to the same Cloudflare account that will own the Worker.
+2. Subscribe the account to the Workers Standard plan.
+3. In **Workers & Pages**, import `baimasonga/docuhub` as a Worker project and
+   select the `main` production branch.
+4. Use repository root `/`, build command `npm ci && npm run build:pages`, and
+   deploy command `npx --yes wrangler@4.128.0 deploy`.
+5. Add the required secrets under the Worker's **Settings → Variables and
+   Secrets**. Keep the existing non-secret values from `wrangler.toml`.
+6. Confirm `avdpdocs.org` appears under the Worker's custom domains. The
+   `[[routes]]` entry in `wrangler.toml` declares it during deployment.
+
+Required production secrets:
+
+```text
+SUPABASE_SERVICE_ROLE_KEY
+SESSION_SECRET
 ```
 
-The Workers build integration does this automatically on pushes to `main`.
+`INITIAL_ADMIN_PASSWORD` is required only for a new empty database. Add email,
+OAuth, AI and external-backup secrets only when those features are approved and
+configured. Never add `SUPABASE_SERVICE_ROLE_KEY` to Vite variables or prefix
+it with `VITE_`.
+
+### Validate and deploy from a trusted workstation
+
+```bash
+npm ci
+npm run lint
+npm test
+npm run check:worker
+npx wrangler login
+npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+npx wrangler secret put SESSION_SECRET
+npm run deploy:worker
+```
+
+For Git-connected Workers Builds, pushes to `main` deploy automatically after
+the configured build succeeds. Protect `main` so the CI workflow must pass
+before merge.
+
+### Release verification
+
+After deployment, verify:
+
+```bash
+curl --fail --show-error https://avdpdocs.org/api/health
+```
+
+Then test login/logout, forced password change, upload and preview, version
+creation, confidential access, internal sharing, an expiring public link, and
+the manual backup action. Check Worker logs for initialization or Supabase
+errors without logging document content.
+
+If a release fails, use **Deployments → Roll back** in Cloudflare to restore the
+previous Worker version. Do not roll back migration `0006` merely to match an
+older application build; it is additive and required by the hardened release.
 
 ## Railway / node hosting
 
