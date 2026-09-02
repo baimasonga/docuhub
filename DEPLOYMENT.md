@@ -160,8 +160,16 @@ After deployment, verify:
 
 ```bash
 # Temporary deployment; use https://avdpdocs.org once the custom domain is live.
-curl --fail --show-error https://docuhub.<account>.workers.dev/api/health
+curl --show-error https://docuhub.<account>.workers.dev/api/health
 ```
+
+`{"status":"ok",...}` means the Worker booted. A `503` with
+`{"status":"degraded","reason":"..."}` means startup failed and the reason
+names the unmet requirement -- a missing secret, or a migration that has not
+been applied. The same reason is returned to the browser on every `/api/*`
+call, so the sign-in page shows it instead of a bare "Request failed (503)".
+Fix the named item and redeploy; initialization is retried on the next
+request, so no restart is needed.
 
 Then test login/logout, forced password change, upload and preview, version
 creation, confidential access, internal sharing, an expiring public link, and

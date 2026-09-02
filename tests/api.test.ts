@@ -87,6 +87,9 @@ test('production refuses to start without durable storage and required secrets',
     "import('./server.ts').then(m => m.ensureRuntimeReady()).then(() => process.exit(0)).catch(() => process.exit(23))"
   ], { cwd: process.cwd(), env, encoding: 'utf8' });
   assert.equal(result.status, 23, `production unexpectedly started: ${result.stdout}\n${result.stderr}`);
+  // The operator-facing message must name the missing requirement -- the Worker
+  // hands this same text back on the 503 rather than an opaque failure.
+  assert.match(result.stderr, /SESSION_SECRET/, 'the startup failure says which requirement is unmet');
 });
 
 test('security migration uses concurrency-safe unique indexes', () => {

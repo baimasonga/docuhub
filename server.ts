@@ -3292,7 +3292,10 @@ async function initRuntime() {
     const admin = (await db().listUsers()).find(u => u.role === 'Admin' && !u.passwordHash);
     if (admin) {
       if (process.env.NODE_ENV === 'production' && !process.env.INITIAL_ADMIN_PASSWORD) {
-        throw new Error('INITIAL_ADMIN_PASSWORD is required for a fresh production database.');
+        throw new Error(
+          'INITIAL_ADMIN_PASSWORD is required for a fresh production database. ' +
+          'Set it as a deployment secret and redeploy; the seeded Admin must change it at first login.'
+        );
       }
       const initial = process.env.INITIAL_ADMIN_PASSWORD || 'ChangeMe!2026';
       await db().updateUser(admin.id, { passwordHash: hashPassword(initial), mustChangePassword: true });
@@ -3314,10 +3317,23 @@ async function initRuntime() {
 }
 
 let initPromise: Promise<void> | null = null;
+// Why the last initRuntime() attempt failed. Every message thrown from there
+// names a configuration key or a schema problem -- never a secret value -- so
+// it is safe to hand to an operator, and without it a failed boot is just an
+// opaque 503 with the explanation buried in the platform's logs.
+let lastInitError: string | null = null;
+
+export function runtimeInitError(): string | null {
+  return lastInitError;
+}
+
 export function ensureRuntimeReady(): Promise<void> {
   if (!initPromise) {
-    initPromise = initRuntime().catch((err) => {
+    initPromise = initRuntime().then(() => {
+      lastInitError = null;
+    }).catch((err) => {
       console.error('[startup] Runtime init failed:', err);
+      lastInitError = (err as Error).message || String(err);
       // Allow a later request to retry instead of wedging on a transient error.
       initPromise = null;
       throw err;

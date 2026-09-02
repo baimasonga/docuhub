@@ -4,7 +4,7 @@
 // Everything under /api/* and /s/* is handed to the existing Express app in
 // ../server.ts via Cloudflare's Node HTTP compatibility bridge.
 import { httpServerHandler } from 'cloudflare:node';
-import { ensureRuntimeReady, runNightlyMaintenance } from '../server';
+import { ensureRuntimeReady, runNightlyMaintenance, runtimeInitError } from '../server';
 
 interface Env {
   ASSETS: { fetch: (request: Request) => Promise<Response> };
@@ -35,9 +35,21 @@ export default {
         await ensureRuntimeReady();
       } catch (err) {
         console.error('[worker] runtime init failed; refusing unsafe fallback.', err);
-        return new Response('Service temporarily unavailable.', {
+        // The startup checks report a missing configuration key or an unapplied
+        // migration -- never a secret value -- so say which, in JSON the client
+        // already knows how to render. An opaque 503 sends whoever is holding
+        // the deployment hunting through platform logs for a one-line answer.
+        const reason = runtimeInitError() || 'The server could not start.';
+        const body = url.pathname === '/api/health'
+          ? { status: 'degraded', ready: false, reason }
+          : { error: `DocuHub is not ready: ${reason}` };
+        return new Response(JSON.stringify(body), {
           status: 503,
-          headers: { 'Cache-Control': 'no-store', 'Retry-After': '30' }
+          headers: {
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-store',
+            'Retry-After': '30'
+          }
         });
       }
       return secure(await expressHandler.fetch(request, env as unknown as Record<string, unknown>, ctx));
