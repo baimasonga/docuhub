@@ -2785,7 +2785,8 @@ app.post('/api/transfers', h(async (req, res) => {
   }
   await logActivity(user, 'Create Transfer', undefined, undefined,
     `Created "${title}" with ${items.length} immutable file version(s) for ${recipients.length} recipient(s).`);
-  res.status(201).json({ success: true, transfer: publicTransfer(transfer, true), url: transferUrl, emailsSent });
+  const apiUrl = `${requestBaseUrl(req)}/api/transfer/${transfer.token}`;
+  res.status(201).json({ success: true, transfer: publicTransfer(transfer, true), url: transferUrl, apiUrl, emailsSent });
 }));
 
 app.post('/api/transfers/:id/revoke', h(async (req, res) => {
@@ -2821,10 +2822,11 @@ app.get('/api/transfer/:token', h(async (req, res) => {
   if (!transfer) return res.status(404).json({ error: 'This transfer is invalid.' });
   const expired = transferExpired(transfer);
   const exhausted = transferExhausted(transfer);
+  const unlocked = transferIsUnlocked(req, transfer);
   res.json({
     id: transfer.id,
-    title: transfer.requiresPassword ? 'Protected transfer' : transfer.title,
-    message: transfer.requiresPassword ? undefined : transfer.message,
+    title: unlocked ? transfer.title : 'Protected transfer',
+    message: unlocked ? transfer.message : undefined,
     expiresAt: transfer.expiresAt,
     isActive: transfer.isActive,
     requiresPassword: transfer.requiresPassword,
@@ -2832,9 +2834,9 @@ app.get('/api/transfer/:token', h(async (req, res) => {
     maxDownloads: transfer.maxDownloads,
     expired,
     exhausted,
-    files: transfer.requiresPassword ? [] : transfer.items.map(item => ({
+    files: unlocked ? transfer.items.map(item => ({
       id: item.id, fileName: item.fileName, fileSize: item.fileSize, fileType: item.fileType
-    }))
+    })) : []
   });
 }));
 

@@ -534,8 +534,13 @@ test('password-protected transfers hide file metadata until unlocked and can be 
   });
   assert.equal(created.status, 201);
   const payload = await created.json();
+  assert.match(payload.apiUrl, /\/api\/transfer\/transfer-/);
   const metadata = await api(null, 'GET', '/api/transfer/' + payload.transfer.id);
   assert.equal(metadata.status, 404, 'internal ids are not public transfer tokens');
+
+  const lockedApi = await fetch(payload.apiUrl, { redirect: 'manual' });
+  assert.equal(lockedApi.status, 200);
+  assert.deepEqual((await lockedApi.json()).files, [], 'the token API must hide protected file metadata');
 
   const locked = await api(null, 'GET', '/t/' + payload.transfer.shortCode);
   assert.equal(locked.status, 200);
@@ -567,6 +572,9 @@ test('password-protected transfers hide file metadata until unlocked and can be 
   });
   assert.equal(opened.status, 200);
   assert.match(await opened.text(), /Protected package/);
+  const unlockedApi = await fetch(payload.apiUrl, { headers: { Cookie: transferCookie }, redirect: 'manual' });
+  assert.equal(unlockedApi.status, 200);
+  assert.equal((await unlockedApi.json()).files.length, 1, 'the token API reveals files after unlock');
 
   const revoke = await api('admin', 'POST', '/api/transfers/' + payload.transfer.id + '/revoke', {});
   assert.equal(revoke.status, 200);
