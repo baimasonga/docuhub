@@ -68,13 +68,70 @@ create index if not exists transfer_items_version_idx
 create index if not exists transfer_recipients_transfer_idx
   on public.transfer_recipients(transfer_id);
 
+-- Create the package header, immutable item pins, and recipients in one
+-- transaction. The application calls this through the service role only.
+create or replace function public.docuhub_create_transfer(
+  p_transfer jsonb,
+  p_items jsonb,
+  p_recipients jsonb
+) returns void
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+begin
+  insert into public.secure_transfers (
+    id, institution_id, created_by, created_by_name, title, message, token,
+    short_code, expires_at, is_active, access_count, download_count,
+    max_downloads, requires_password, password_hash, created_at, updated_at
+  ) values (
+    p_transfer->>'id', p_transfer->>'institution_id', p_transfer->>'created_by',
+    p_transfer->>'created_by_name', p_transfer->>'title', p_transfer->>'message',
+    p_transfer->>'token', p_transfer->>'short_code',
+    (p_transfer->>'expires_at')::timestamptz,
+    coalesce((p_transfer->>'is_active')::boolean, true),
+    coalesce((p_transfer->>'access_count')::integer, 0),
+    coalesce((p_transfer->>'download_count')::integer, 0),
+    (p_transfer->>'max_downloads')::integer,
+    coalesce((p_transfer->>'requires_password')::boolean, false),
+    p_transfer->>'password_hash',
+    (p_transfer->>'created_at')::timestamptz,
+    (p_transfer->>'updated_at')::timestamptz
+  );
+
+  insert into public.transfer_items (
+    id, transfer_id, document_id, version_id, file_name, file_size, file_type, created_at
+  )
+  select id, transfer_id, document_id, version_id, file_name, file_size, file_type, created_at
+  from jsonb_to_recordset(coalesce(p_items, '[]'::jsonb)) as item(
+    id text, transfer_id text, document_id text, version_id text,
+    file_name text, file_size bigint, file_type text, created_at timestamptz
+  );
+
+  insert into public.transfer_recipients (
+    id, transfer_id, email, sent_at, first_accessed_at, last_accessed_at, download_count
+  )
+  select id, transfer_id, email, sent_at, first_accessed_at, last_accessed_at,
+    coalesce(download_count, 0)
+  from jsonb_to_recordset(coalesce(p_recipients, '[]'::jsonb)) as recipient(
+    id text, transfer_id text, email text, sent_at timestamptz,
+    first_accessed_at timestamptz, last_accessed_at timestamptz, download_count integer
+  );
+end;
+$$;
+
+revoke all on function public.docuhub_create_transfer(jsonb, jsonb, jsonb)
+  from public, anon, authenticated;
+grant execute on function public.docuhub_create_transfer(jsonb, jsonb, jsonb)
+  to service_role;
+
 create or replace function public.docuhub_consume_transfer(
   p_id text,
   p_count_download boolean
 ) returns setof public.secure_transfers
 language sql
 security definer
-set search_path = public
+set search_path = ''
 as $$
   update public.secure_transfers
   set access_count = access_count + 1,

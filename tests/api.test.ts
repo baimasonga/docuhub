@@ -118,7 +118,10 @@ test('secure-transfer migration is private and consumes downloads atomically', (
   assert.match(sql, /create table if not exists public\.secure_transfers/i);
   assert.match(sql, /alter table public\.secure_transfers enable row level security/i);
   assert.match(sql, /revoke all on public\.secure_transfers.*anon.*authenticated/is);
+  assert.match(sql, /docuhub_create_transfer/i);
+  assert.match(sql, /security invoker/i);
   assert.match(sql, /docuhub_consume_transfer/i);
+  assert.match(sql, /set search_path = ''/i);
   assert.match(sql, /version_id text not null references public\.document_versions/i);
 });
 
@@ -567,6 +570,8 @@ test('password-protected transfers hide file metadata until unlocked and can be 
 
   const revoke = await api('admin', 'POST', '/api/transfers/' + payload.transfer.id + '/revoke', {});
   assert.equal(revoke.status, 200);
+  const extendRevoked = await api('admin', 'POST', '/api/transfers/' + payload.transfer.id + '/extend', { days: 7 });
+  assert.equal(extendRevoked.status, 409, 'extending a revoked transfer must not reactivate it');
   assert.equal((await api(null, 'GET', '/t/' + payload.transfer.shortCode)).status, 403);
 });
 

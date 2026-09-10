@@ -717,25 +717,18 @@ export class SupabaseStore implements DataStore {
     return Promise.all(rows.map(row => this.hydrateTransfer(row)));
   }
   async createTransfer(transfer: SecureTransfer) {
-    SupabaseStore.unwrap(
-      await this.from('secure_transfers').insert(transferToRow(transfer)).select('id').single(), 'createTransfer.header');
-    try {
-      if (transfer.items.length) {
-        SupabaseStore.unwrap(await this.from('transfer_items').insert(transfer.items.map(item => ({
-          id: item.id, transfer_id: item.transferId, document_id: item.documentId, version_id: item.versionId,
-          file_name: item.fileName, file_size: item.fileSize, file_type: item.fileType, created_at: item.createdAt
-        }))).select('id'), 'createTransfer.items');
-      }
-      if (transfer.recipients.length) {
-        SupabaseStore.unwrap(await this.from('transfer_recipients').insert(transfer.recipients.map(recipient => ({
-          id: recipient.id, transfer_id: recipient.transferId, email: recipient.email,
-          sent_at: recipient.sentAt, download_count: recipient.downloadCount
-        }))).select('id'), 'createTransfer.recipients');
-      }
-    } catch (error) {
-      await this.from('secure_transfers').delete().eq('id', transfer.id);
-      throw error;
-    }
+    const items = transfer.items.map(item => ({
+      id: item.id, transfer_id: item.transferId, document_id: item.documentId, version_id: item.versionId,
+      file_name: item.fileName, file_size: item.fileSize, file_type: item.fileType, created_at: item.createdAt
+    }));
+    const recipients = transfer.recipients.map(recipient => ({
+      id: recipient.id, transfer_id: recipient.transferId, email: recipient.email,
+      sent_at: recipient.sentAt, first_accessed_at: recipient.firstAccessedAt,
+      last_accessed_at: recipient.lastAccessedAt, download_count: recipient.downloadCount
+    }));
+    SupabaseStore.unwrap(await this.supabase.rpc('docuhub_create_transfer', {
+      p_transfer: transferToRow(transfer), p_items: items, p_recipients: recipients
+    }), 'createTransfer');
   }
   async updateTransfer(id: string, patch: Partial<SecureTransfer>) {
     SupabaseStore.unwrap(

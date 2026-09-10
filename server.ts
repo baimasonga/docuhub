@@ -2713,7 +2713,7 @@ app.post('/api/transfers', h(async (req, res) => {
   if (maxDownloads !== null && (!Number.isInteger(maxDownloads) || maxDownloads < 1 || maxDownloads > 10_000)) {
     return res.status(400).json({ error: 'Maximum downloads must be an integer from 1 to 10,000.' });
   }
-  const password = String(req.body?.password || '').trim();
+  const password = String(req.body?.password || '');
   if (password && (password.length < 10 || password.length > 128)) {
     return res.status(400).json({ error: 'Transfer passwords must be 10 to 128 characters.' });
   }
@@ -2805,6 +2805,8 @@ app.post('/api/transfers/:id/extend', h(async (req, res) => {
   const transfer = await db().getTransfer(req.params.id);
   if (!transfer) return res.status(404).json({ error: 'Transfer not found.' });
   if (!canManageTransfer(user, transfer)) return res.status(403).json({ error: 'You cannot extend this transfer.' });
+  if (!transfer.isActive) return res.status(409).json({ error: 'A revoked transfer cannot be extended.' });
+  if (transferExhausted(transfer)) return res.status(409).json({ error: 'An exhausted transfer cannot be extended.' });
   const days = Number(req.body?.days ?? 7);
   if (!Number.isInteger(days) || days < 1 || days > 365) return res.status(400).json({ error: 'Extension must be 1 to 365 days.' });
   const base = Math.max(Date.now(), new Date(transfer.expiresAt).getTime());
@@ -3464,6 +3466,15 @@ async function serveTransferFile(req: express.Request, res: express.Response, tr
   if (!item) return res.status(404).send('This transfer file is unavailable.');
   const version = await db().getVersion(item.versionId);
   if (!version || version.documentId !== item.documentId) return res.status(404).send('This file version is unavailable.');
+  let signedUrl: string | null = null;
+  let inlineFile: Buffer | null = null;
+  if (version.storagePath) {
+    signedUrl = await signedUrlFor(version.storagePath, { download: version.fileName });
+    if (!signedUrl) return res.status(404).send('Stored file content is unavailable.');
+  } else {
+    if (!version.fileData) return res.status(404).send('Stored file content is unavailable.');
+    inlineFile = storedFileToBuffer(version.fileData);
+  }
   const consumed = await db().consumeTransfer(transfer.id, true);
   if (!consumed) return res.status(410).send('This transfer is no longer available.');
   const creator = await db().getUser(transfer.createdBy);
@@ -3472,14 +3483,10 @@ async function serveTransferFile(req: express.Request, res: express.Response, tr
     'Transfer Download', item.documentId, item.fileName,
     'Downloaded from transfer "' + transfer.title + '" (#' + consumed.downloadCount + ').'
   );
-  if (version.storagePath) {
-    const url = await signedUrlFor(version.storagePath, { download: version.fileName });
-    if (url) return res.redirect(302, url);
-  }
-  if (!version.fileData) return res.status(404).send('Stored file content is unavailable.');
+  if (signedUrl) return res.redirect(302, signedUrl);
   res.setHeader('Content-Type', mimeForType(version.fileType));
   res.setHeader('Content-Disposition', 'attachment; filename="' + safeDownloadName(version.fileName) + '"');
-  return res.send(storedFileToBuffer(version.fileData));
+  return res.send(inlineFile!);
 }
 
 app.get('/t/:code', h(async (req, res) => {

@@ -55,7 +55,7 @@ export default function TransfersView({ documents, currentUser, notify }: Props)
           title,
           message: message.trim() || undefined,
           recipientEmails: emails.split(',').map(email => email.trim()).filter(Boolean),
-          password: password.trim() || undefined,
+          password: password || undefined,
           expiresInDays: Number(expiry),
           maxDownloads: maxDownloads ? Number(maxDownloads) : null
         })
