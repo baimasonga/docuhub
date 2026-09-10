@@ -101,7 +101,7 @@ test('security migration uses concurrency-safe unique indexes', () => {
 
 test('external-link migration pins immutable versions and indexes lifecycle queries', () => {
   const sql = fs.readFileSync(
-    path.join(process.cwd(), 'supabase/migrations/20260910060219_pin_external_share_versions.sql'),
+    path.join(process.cwd(), 'supabase/migrations/20260910071105_pin_external_share_versions.sql'),
     'utf8'
   );
   assert.match(sql, /add column if not exists version_id text/i);

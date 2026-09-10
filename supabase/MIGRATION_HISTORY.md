@@ -20,10 +20,11 @@ The repository includes no-op files for the two generated timestamps already
 present in production. They describe existing history; they do not recreate or
 overwrite the rollback snapshot.
 
-Expected result: local and remote histories contain 0001–0008 and the two
-`2026090209…` markers. Only migrations newer than those entries should appear
-in the dry run. If any earlier migration still appears pending, stop and inspect
-the ledger instead of using `--include-all` or editing production tables.
+Production reconciliation was completed on 2026-09-10 after a verified rollback
+snapshot. Local and remote histories now contain 0001–0008, the two
+`2026090209…` markers, backup marker `20260910070935`, and the external-link
+version migration `20260910071105`. If any earlier migration appears pending,
+stop and inspect the ledger instead of using `--include-all` or rerunning it.
 
 After reconciliation, all future remote schema changes must be applied from a
 committed migration file. Do not use the production Dashboard SQL editor for
