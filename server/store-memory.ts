@@ -10,7 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import {
   User, Folder, Document, DocumentVersion, SharePermission,
-  ApprovalRequest, ActivityLog, Comment, ExternalShareLink, Institution, BackupRun, Notification
+  ApprovalRequest, ActivityLog, Comment, ExternalShareLink, Institution, BackupRun, Notification, SecureTransfer
 } from '../src/types';
 import {
   DataStore, DocumentFilter, StoredUser,
@@ -28,6 +28,7 @@ interface Collections {
   comments: Comment[];
   logs: ActivityLog[];
   externalLinks: ExternalShareLink[];
+  transfers: SecureTransfer[];
   notifications: Notification[];
   backupRuns: BackupRun[];
   documentStars: Array<{ userId: string; documentId: string }>;
@@ -43,7 +44,7 @@ export class MemoryStore implements DataStore {
   private db: Collections = {
     users: [], institutions: [], folders: [], documents: [], versions: [],
     permissions: [], approvals: [], comments: [], logs: [], externalLinks: [],
-    notifications: [], backupRuns: [], documentStars: []
+    notifications: [], backupRuns: [], documentStars: [], transfers: []
   };
 
   /** filePath === null disables file persistence (Workers, tests). */
@@ -66,6 +67,7 @@ export class MemoryStore implements DataStore {
 
   private seedMissing() {
     if (!Array.isArray(this.db.documentStars)) this.db.documentStars = [];
+    if (!Array.isArray(this.db.transfers)) this.db.transfers = [];
     if (this.db.institutions.length === 0) this.db.institutions = structuredClone(DEFAULT_INSTITUTIONS);
     if (this.db.users.length === 0) this.db.users = [structuredClone(DEFAULT_ADMIN)];
     const fallbackInstitutionId = this.db.institutions[0].id;
@@ -347,6 +349,46 @@ export class MemoryStore implements DataStore {
     return { ...link };
   }
   async listAllLinks() { return this.db.externalLinks.map(l => ({ ...l })); }
+
+  // ---- Multi-document transfers ----
+  private copyTransfer(t: SecureTransfer): SecureTransfer {
+    return { ...t, items: t.items.map(i => ({ ...i })), recipients: t.recipients.map(r => ({ ...r })) };
+  }
+  async getTransfer(id: string) {
+    const t = this.db.transfers.find(x => x.id === id);
+    return t ? this.copyTransfer(t) : null;
+  }
+  async getTransferByToken(token: string) {
+    const t = this.db.transfers.find(x => x.token === token);
+    return t ? this.copyTransfer(t) : null;
+  }
+  async getTransferByCode(code: string) {
+    const t = this.db.transfers.find(x => x.shortCode === code);
+    return t ? this.copyTransfer(t) : null;
+  }
+  async listTransfers() {
+    return [...this.db.transfers].sort(byNewest).map(t => this.copyTransfer(t));
+  }
+  async createTransfer(transfer: SecureTransfer) {
+    this.db.transfers.push(this.copyTransfer(transfer));
+    this.flush();
+  }
+  async updateTransfer(id: string, patch: Partial<SecureTransfer>) {
+    const transfer = this.db.transfers.find(x => x.id === id);
+    if (!transfer) return;
+    Object.assign(transfer, patch, { updatedAt: new Date().toISOString() });
+    this.flush();
+  }
+  async consumeTransfer(id: string, countDownload: boolean) {
+    const transfer = this.db.transfers.find(x => x.id === id);
+    if (!transfer || !transfer.isActive || new Date(transfer.expiresAt).getTime() <= Date.now()) return null;
+    if (countDownload && transfer.maxDownloads != null && transfer.downloadCount >= transfer.maxDownloads) return null;
+    transfer.accessCount += 1;
+    if (countDownload) transfer.downloadCount += 1;
+    transfer.updatedAt = new Date().toISOString();
+    this.flush();
+    return this.copyTransfer(transfer);
+  }
 
   // ---- Backup runs ----
   async listBackupRuns(limit = 20) {

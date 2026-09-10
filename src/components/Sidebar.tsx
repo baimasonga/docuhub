@@ -19,7 +19,8 @@ import {
   LayoutDashboard,
   Settings,
   UserCog,
-  AlertTriangle
+  AlertTriangle,
+  Send
 } from 'lucide-react';
 import { User } from '../types';
 
@@ -49,6 +50,7 @@ export default function Sidebar({
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'my-drive', label: 'Folder Cabinets', icon: Folder },
     { id: 'shared-with-me', label: 'Shares', icon: Clock },
+    { id: 'transfers', label: 'Transfers', icon: Send },
     { id: 'starred', label: 'Starred Files', icon: Star },
   ];
 

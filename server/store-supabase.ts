@@ -14,7 +14,7 @@
 import { SupabaseClient } from '@supabase/supabase-js';
 import {
   User, Folder, Document, DocumentVersion, SharePermission,
-  ApprovalRequest, ActivityLog, Comment, ExternalShareLink, Institution, BackupRun, Notification
+  ApprovalRequest, ActivityLog, Comment, ExternalShareLink, Institution, BackupRun, Notification, SecureTransfer, TransferItem, TransferRecipient
 } from '../src/types';
 import {
   DataStore, DocumentFilter, StoredUser,
@@ -197,6 +197,36 @@ const linkToRow = (l: Partial<ExternalShareLink>): Row => {
     password_hash: l.passwordHash
   });
   if ('maxDownloads' in l) row.max_downloads = l.maxDownloads;
+  return row;
+};
+
+const transferItemFromRow = (r: Row): TransferItem => ({
+  id: r.id, transferId: r.transfer_id, documentId: r.document_id, versionId: r.version_id,
+  fileName: r.file_name, fileSize: Number(r.file_size) || 0, fileType: r.file_type || '',
+  createdAt: r.created_at
+});
+const transferRecipientFromRow = (r: Row): TransferRecipient => ({
+  id: r.id, transferId: r.transfer_id, email: r.email, sentAt: r.sent_at ?? undefined,
+  firstAccessedAt: r.first_accessed_at ?? undefined, lastAccessedAt: r.last_accessed_at ?? undefined,
+  downloadCount: Number(r.download_count) || 0
+});
+const transferFromRow = (r: Row, items: TransferItem[] = [], recipients: TransferRecipient[] = []): SecureTransfer => ({
+  id: r.id, institutionId: r.institution_id, createdBy: r.created_by, createdByName: r.created_by_name,
+  title: r.title, message: r.message ?? undefined, token: r.token, shortCode: r.short_code,
+  expiresAt: r.expires_at, isActive: r.is_active, accessCount: Number(r.access_count) || 0,
+  downloadCount: Number(r.download_count) || 0, maxDownloads: r.max_downloads,
+  requiresPassword: r.requires_password, passwordHash: r.password_hash ?? undefined,
+  createdAt: r.created_at, updatedAt: r.updated_at, items, recipients
+});
+const transferToRow = (t: Partial<SecureTransfer>): Row => {
+  const row = omitUndefined({
+    id: t.id, institution_id: t.institutionId, created_by: t.createdBy, created_by_name: t.createdByName,
+    title: t.title, message: t.message, token: t.token, short_code: t.shortCode,
+    expires_at: t.expiresAt, is_active: t.isActive, access_count: t.accessCount,
+    download_count: t.downloadCount, requires_password: t.requiresPassword,
+    password_hash: t.passwordHash, created_at: t.createdAt, updated_at: t.updatedAt
+  });
+  if ('maxDownloads' in t) row.max_downloads = t.maxDownloads;
   return row;
 };
 
@@ -654,6 +684,63 @@ export class SupabaseStore implements DataStore {
   async listAllLinks() {
     const data = SupabaseStore.unwrap(await this.from('external_share_links').select('*'), 'listAllLinks');
     return (data as Row[]).map(linkFromRow);
+  }
+
+  // ---- Multi-document transfers ----
+  private async hydrateTransfer(row: Row): Promise<SecureTransfer> {
+    const [itemsResult, recipientsResult] = await Promise.all([
+      this.from('transfer_items').select('*').eq('transfer_id', row.id).order('created_at', { ascending: true }),
+      this.from('transfer_recipients').select('*').eq('transfer_id', row.id).order('email', { ascending: true })
+    ]);
+    const items = SupabaseStore.unwrap(itemsResult, 'hydrateTransfer.items') as Row[];
+    const recipients = SupabaseStore.unwrap(recipientsResult, 'hydrateTransfer.recipients') as Row[];
+    return transferFromRow(row, items.map(transferItemFromRow), recipients.map(transferRecipientFromRow));
+  }
+  async getTransfer(id: string) {
+    const row = SupabaseStore.unwrap(
+      await this.from('secure_transfers').select('*').eq('id', id).maybeSingle(), 'getTransfer') as Row | null;
+    return row ? this.hydrateTransfer(row) : null;
+  }
+  async getTransferByToken(token: string) {
+    const row = SupabaseStore.unwrap(
+      await this.from('secure_transfers').select('*').eq('token', token).maybeSingle(), 'getTransferByToken') as Row | null;
+    return row ? this.hydrateTransfer(row) : null;
+  }
+  async getTransferByCode(code: string) {
+    const row = SupabaseStore.unwrap(
+      await this.from('secure_transfers').select('*').eq('short_code', code).maybeSingle(), 'getTransferByCode') as Row | null;
+    return row ? this.hydrateTransfer(row) : null;
+  }
+  async listTransfers() {
+    const rows = SupabaseStore.unwrap(
+      await this.from('secure_transfers').select('*').order('created_at', { ascending: false }), 'listTransfers') as Row[];
+    return Promise.all(rows.map(row => this.hydrateTransfer(row)));
+  }
+  async createTransfer(transfer: SecureTransfer) {
+    const items = transfer.items.map(item => ({
+      id: item.id, transfer_id: item.transferId, document_id: item.documentId, version_id: item.versionId,
+      file_name: item.fileName, file_size: item.fileSize, file_type: item.fileType, created_at: item.createdAt
+    }));
+    const recipients = transfer.recipients.map(recipient => ({
+      id: recipient.id, transfer_id: recipient.transferId, email: recipient.email,
+      sent_at: recipient.sentAt, first_accessed_at: recipient.firstAccessedAt,
+      last_accessed_at: recipient.lastAccessedAt, download_count: recipient.downloadCount
+    }));
+    SupabaseStore.unwrap(await this.supabase.rpc('docuhub_create_transfer', {
+      p_transfer: transferToRow(transfer), p_items: items, p_recipients: recipients
+    }), 'createTransfer');
+  }
+  async updateTransfer(id: string, patch: Partial<SecureTransfer>) {
+    SupabaseStore.unwrap(
+      await this.from('secure_transfers').update(transferToRow({ ...patch, updatedAt: new Date().toISOString() }))
+        .eq('id', id).select('id'), 'updateTransfer');
+  }
+  async consumeTransfer(id: string, countDownload: boolean) {
+    const data = SupabaseStore.unwrap(
+      await this.supabase.rpc('docuhub_consume_transfer', { p_id: id, p_count_download: countDownload }),
+      'consumeTransfer');
+    const row = Array.isArray(data) ? data[0] : data;
+    return row ? this.hydrateTransfer(row as Row) : null;
   }
 
   // ---- Backup runs ----

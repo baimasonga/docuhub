@@ -74,6 +74,7 @@ import {
 } from './types';
 import Sidebar from './components/Sidebar';
 import { LoginScreen, ResetPasswordScreen, ChangePasswordModal } from './components/Auth';
+import TransfersView from './components/TransfersView';
 const PdfEditor = React.lazy(() => import('./components/PdfEditor'));
 const WordPreview = React.lazy(() => import('./components/WordPreview'));
 const SAFE_FILE_ACCEPT = '.pdf,.docx,.xlsx,.pptx,.txt,.csv,.md,.json,.png,.jpg,.jpeg,.gif,.webp';
@@ -1997,6 +1998,10 @@ export default function App() {
 
               </div>
             </div>
+          )}
+
+          {currentView === 'transfers' && currentUser && (
+            <TransfersView documents={documents} currentUser={currentUser} notify={triggerToast} />
           )}
 
           {/* 2. VIEW: MY DRIVE & FILE NAVIGATOR */}
