@@ -829,8 +829,10 @@ export default function App() {
           console.error('[upload] direct PUT failed:', put.status);
         }
       } catch (err) {
-        console.error('[upload] signed upload failed; falling back to inline:', err);
+        console.error('[upload] signed upload failed:', err);
+        throw new Error('The direct upload could not be completed. Check your connection and try again.');
       }
+      throw new Error('The direct upload could not be completed. Check your connection and try again.');
     }
     return { fileData: await readFileAsBase64(file) };
   };

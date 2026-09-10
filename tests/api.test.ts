@@ -99,6 +99,17 @@ test('security migration uses concurrency-safe unique indexes', () => {
   assert.doesNotMatch(sql, /create trigger document_versions_no_duplicates/i);
 });
 
+test('external-link migration pins immutable versions and indexes lifecycle queries', () => {
+  const sql = fs.readFileSync(
+    path.join(process.cwd(), 'supabase/migrations/20260910071105_pin_external_share_versions.sql'),
+    'utf8'
+  );
+  assert.match(sql, /add column if not exists version_id text/i);
+  assert.match(sql, /alter column version_id set not null/i);
+  assert.match(sql, /foreign key \(version_id\).*document_versions/i);
+  assert.match(sql, /external_share_links_lifecycle_idx/i);
+});
+
 test('protected endpoints reject unauthenticated requests', async () => {
   for (const p of ['/api/documents', '/api/users', '/api/stats', '/api/folders', '/api/activity']) {
     const res = await api(null, 'GET', p);
@@ -415,6 +426,35 @@ test('external link download limits are enforced atomically', async () => {
   assert.equal((await api(null, 'GET', `/s/${link.shortCode}`)).status, 410);
 });
 
+test('an external link remains pinned to the version that was shared', async () => {
+  const firstText = 'immutable version one';
+  const uploaded = await api('admin', 'POST', '/api/documents/upload', {
+    title: 'Immutable Share Fixture', fileName: 'immutable-v1.txt', fileType: 'text/plain',
+    fileSize: Buffer.byteLength(firstText), fileData: Buffer.from(firstText).toString('base64'),
+    autoFile: false, folderId: null
+  });
+  assert.equal(uploaded.status, 201);
+  const fixtureId = (await uploaded.json()).document.id;
+
+  const created = await api('admin', 'POST', `/api/documents/${fixtureId}/external-link`, {
+    expiresInDays: 7, allowDownload: true
+  });
+  assert.equal(created.status, 200);
+  const { link } = await created.json();
+  assert.ok(link.versionId, 'the public link records the exact version id');
+
+  const secondText = 'replacement version two';
+  const next = await api('admin', 'POST', `/api/documents/${fixtureId}/version`, {
+    fileName: 'immutable-v2.txt', fileType: 'text/plain', fileSize: Buffer.byteLength(secondText),
+    fileData: Buffer.from(secondText).toString('base64')
+  });
+  assert.equal(next.status, 200);
+
+  const shared = await api(null, 'GET', `/s/${link.shortCode}`);
+  assert.equal(shared.status, 200);
+  assert.equal(await shared.text(), firstText, 'the old link must not silently switch to v2');
+});
+
 test('security validation rejects active content and invalid permissions', async () => {
   const activeContent = Buffer.from('<script>alert(1)</script>').toString('base64');
   const upload = await api('admin', 'POST', '/api/documents/upload', {
@@ -706,6 +746,22 @@ test('logout clears the session', async () => {
   assert.equal(res.status, 200);
   const after = await api('staff', 'GET', '/api/documents');
   assert.equal(after.status, 401);
+});
+
+test('nightly link lifecycle closes expired links and storage cleanup is safe without Storage', async () => {
+  const { deactivateExpiredExternalLinks, cleanupAbandonedDirectUploads } = await import('../server');
+  const created = await api('admin', 'POST', `/api/documents/${docId}/external-link`, {
+    expiresInDays: 1, requiresPassword: true, password: 'LifecycleTest99'
+  });
+  assert.equal(created.status, 200);
+  const { link } = await created.json();
+
+  const swept = await deactivateExpiredExternalLinks(Date.now() + 2 * 86400000);
+  assert.ok(swept.deactivated >= 1);
+  assert.equal((await api(null, 'GET', `/s/${link.shortCode}`)).status, 403, 'closed links cannot be used');
+
+  const storage = await cleanupAbandonedDirectUploads();
+  assert.deepEqual(storage, { scanned: 0, removed: 0, failed: 0, skipped: true });
 });
 
 test('trash, restore, and purge lifecycle', async () => {

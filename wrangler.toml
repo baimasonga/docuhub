@@ -2,8 +2,12 @@ name = "docuhub"
 main = "worker/index.ts"
 compatibility_date = "2026-06-16"
 compatibility_flags = ["nodejs_compat"]
-workers_dev = true
+workers_dev = false
 preview_urls = false
+
+[[routes]]
+pattern = "avdpdocs.org"
+custom_domain = true
 
 # DocuHub performs password hashing and document metadata processing in the
 # Worker. The Standard (paid) Workers plan provides the required CPU budget;
@@ -52,14 +56,7 @@ crons = ["0 2 * * *"]
 
 [vars]
 NODE_ENV = "production"
-# APP_URL is intentionally unset while DocuHub runs on the temporary
-# https://docuhub.<account>.workers.dev hostname: the account subdomain is not
-# known until the first deployment, and a stale value here breaks the origin
-# check and every generated link (OAuth callback, password reset, invites,
-# share links). With it unset the server derives the origin from the request
-# host, which it only trusts for *.workers.dev (see appOrigin() in server.ts).
-# Set APP_URL = "https://avdpdocs.org" again together with the [[routes]]
-# custom-domain entry when that domain is added to Cloudflare.
+APP_URL = "https://avdpdocs.org"
 # The project URL is public information (it's visible to every client);
 # only the service-role key must stay a secret.
 SUPABASE_URL = "https://vwpibqvwzvqccoqceumv.supabase.co"
@@ -85,7 +82,7 @@ TRASH_RETENTION_DAYS = "0"
 # repo is readable by anyone with repo access and git history is forever.
 #   SUPABASE_SERVICE_ROLE_KEY    Supabase service-role key (durable persistence + storage)
 #   INITIAL_ADMIN_PASSWORD       Required only for a fresh database whose seeded Admin has no password
-#   SESSION_SECRET               Optional — overrides the cookie HMAC secret
+#   SESSION_SECRET               Required — at least 32 random characters; signs sessions
 #   RESEND_API_KEY               Optional — enables email notifications
 #   RESEND_SHARE_TEMPLATE_ID     Optional — Resend dashboard template ID used for share/
 #                                 share-link emails instead of this codebase's built-in HTML

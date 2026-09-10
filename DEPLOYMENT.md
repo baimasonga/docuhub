@@ -36,13 +36,15 @@ instances).
 ### 1. Supabase
 
 1. Create (or restore) a Supabase project.
-2. Apply every file in `supabase/migrations/` in numeric order (or run
-   `supabase db push` with the CLI). Migration `0006_security_hardening.sql`
+2. Apply every file in `supabase/migrations/` in filename order with
+   `supabase db push`. Migration `0006_security_hardening.sql`
    is required by the current application and adds tenant isolation, revocable
    sessions, per-user stars, durable rate limiting and atomic link counters.
    Back up the database first. The migration deliberately stops if it detects
    duplicate version labels or shared storage paths; repair those records and
    copy shared objects to independent paths before retrying.
+   Migration `20260910060219_pin_external_share_versions.sql` pins every
+   public link to an immutable file version and adds link lifecycle indexes.
 3. Copy the **Project URL** and the **service_role key** from
    Project Settings → API.
 
@@ -104,10 +106,9 @@ observability, and a 30-second CPU safety ceiling).
 
 ### One-time Cloudflare setup
 
-1. For the temporary deployment nothing needs to be registered -- the Worker
-   is served on its generated `*.workers.dev` hostname. Add `avdpdocs.org` to
-   the same Cloudflare account that will own the Worker once that domain is
-   available.
+1. Keep the active `avdpdocs.org` zone in the same Cloudflare account that owns
+   the `docuhub` Worker. `wrangler.toml` binds that custom domain directly and
+   deliberately disables the public `workers.dev` hostname.
 2. Subscribe the account to the Workers Standard plan.
 3. In **Workers & Pages**, import `baimasonga/docuhub` as a Worker project and
    select the `main` production branch.
@@ -117,13 +118,9 @@ observability, and a 30-second CPU safety ceiling).
    validation or deployment.
 5. Add the required secrets under the Worker's **Settings → Variables and
    Secrets**. Keep the existing non-secret values from `wrangler.toml`.
-6. Record the generated `https://docuhub.<account>.workers.dev` URL from the
-   first successful build -- that is the address to test against. `APP_URL` is
-   deliberately unset in `wrangler.toml` for this temporary deployment, so no
-   redeploy is needed to make login work. When `avdpdocs.org` is later added to
-   Cloudflare, restore the `[[routes]]` custom-domain entry, set
-   `APP_URL = "https://avdpdocs.org"` and redeploy: a custom domain is only
-   served once `APP_URL` names it.
+6. Verify the deployment at `https://avdpdocs.org/api/health`. The canonical
+   `APP_URL` and custom-domain route are committed in `wrangler.toml`; dashboard
+   values should not override them with another hostname.
 
 Required production secrets:
 
@@ -159,8 +156,7 @@ before merge.
 After deployment, verify:
 
 ```bash
-# Temporary deployment; use https://avdpdocs.org once the custom domain is live.
-curl --show-error https://docuhub.<account>.workers.dev/api/health
+curl --show-error https://avdpdocs.org/api/health
 ```
 
 `{"status":"ok",...}` means the Worker booted. A `503` with
@@ -206,12 +202,15 @@ Sign in locally with the seeded admin and the value of
 - **File storage**: binaries live in a private Supabase Storage bucket
   (`documents`). Small uploads (<2.5 MB) travel inline as base64 and are
   offloaded server-side; larger files upload straight from the browser to
-  Storage via short-lived signed upload URLs (`POST /api/uploads/sign`).
+  Storage via short-lived signed upload URLs (`POST /api/uploads/sign`). Large
+  direct uploads are validated with a 4 KiB range read rather than being
+  buffered by the Worker; if direct upload fails the browser asks the user to
+  retry instead of falling back to oversized base64 JSON.
   Downloads/previews redirect to short-lived signed CDN URLs.
 - **Auth**: email + password (PBKDF2-SHA256), stateless HMAC-signed session
-  cookies (survive redeploys, no server-side session store), forced password
-  change on first login, self-serve reset links by email, admin resets, and a
-  per-process login rate limiter.
+  cookies backed by a revocable session version, forced password change on
+  first login, self-serve reset links by email, admin resets, and durable
+  Supabase-backed rate limiting in production.
 - **Email**: transactional notifications (invite, approval requested/decided,
   document shared, password reset) via Resend; best-effort with timeouts.
 - **AI assistant**: with external AI enabled, "Ask Gemini" answers questions
@@ -227,6 +226,10 @@ Sign in locally with the seeded admin and the value of
   Trigger purges anything past `TRASH_RETENTION_DAYS` (default 30) together
   with the Storage objects only it referenced, after the backup step so a
   document's last night in Trash is still captured externally.
+- **Link and upload lifecycle**: secure links are pinned to the version that
+  existed when they were created. Nightly maintenance closes expired or
+  exhausted links and removes unreferenced `direct/` upload objects older than
+  24 hours.
 - **PWA**: installable manifest + a minimal service worker that caches only
   immutable build assets. The upload dialog includes a camera capture path
   for scanning paper documents on phones.

@@ -176,6 +176,9 @@ export interface BackupRun {
 export interface ExternalShareLink {
   id: string;
   documentId: string;
+  // The exact immutable version exposed by this link. Legacy rows may omit
+  // this until migration 0009 backfills them.
+  versionId?: string;
   token: string;
   shortCode?: string;       // short, shareable code served at /s/<code>
   createdBy: string;
