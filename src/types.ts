@@ -202,6 +202,49 @@ export interface ExternalShareLink {
   passwordHash?: string;
 }
 
+export interface TransferItem {
+  id: string;
+  transferId: string;
+  documentId: string;
+  versionId: string;
+  fileName: string;
+  fileSize: number;
+  fileType: string;
+  createdAt: string;
+}
+
+export interface TransferRecipient {
+  id: string;
+  transferId: string;
+  email: string;
+  sentAt?: string;
+  firstAccessedAt?: string;
+  lastAccessedAt?: string;
+  downloadCount: number;
+}
+
+export interface SecureTransfer {
+  id: string;
+  institutionId: string;
+  createdBy: string;
+  createdByName: string;
+  title: string;
+  message?: string;
+  token: string;
+  shortCode: string;
+  expiresAt: string;
+  isActive: boolean;
+  accessCount: number;
+  downloadCount: number;
+  maxDownloads?: number | null;
+  requiresPassword: boolean;
+  passwordHash?: string;
+  createdAt: string;
+  updatedAt: string;
+  items: TransferItem[];
+  recipients: TransferRecipient[];
+}
+
 export interface DashboardStats {
   totalFiles: number;
   totalSize: number; // bytes

@@ -26,6 +26,9 @@ import {
   ActivityLog,
   Comment,
   ExternalShareLink,
+  SecureTransfer,
+  TransferItem,
+  TransferRecipient,
   DashboardStats,
   Institution,
   ActivityDimension,
@@ -71,7 +74,7 @@ app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Permissions-Policy', 'camera=(self), microphone=(), geolocation=()');
-  if (req.path.startsWith('/api/') || req.path.startsWith('/s/')) res.setHeader('Cache-Control', 'no-store');
+  if (req.path.startsWith('/api/') || req.path.startsWith('/s/') || req.path.startsWith('/t/')) res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Content-Security-Policy', [
     "default-src 'self'",
     "script-src 'self'",
@@ -746,12 +749,21 @@ function publicLink(l: ExternalShareLink) {
   return { ...rest, hasPassword: Boolean(passwordHash || password) };
 }
 
+function publicTransfer(t: SecureTransfer, includeRecipients = false) {
+  const { passwordHash, token, recipients, ...rest } = t;
+  return {
+    ...rest,
+    hasPassword: Boolean(passwordHash),
+    ...(includeRecipients ? { recipients } : {})
+  };
+}
+
 async function genShortCode(): Promise<string> {
   const alphabet = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   for (let attempt = 0; attempt < 8; attempt++) {
     let code = '';
     for (let i = 0; i < 10; i++) code += alphabet[crypto.randomInt(alphabet.length)];
-    if (!(await db().getLinkByCode(code))) return code;
+    if (!(await db().getLinkByCode(code)) && !(await db().getTransferByCode(code))) return code;
   }
   return crypto.randomBytes(6).toString('hex');
 }
@@ -2632,6 +2644,198 @@ app.post('/api/external-link/:token/revoke', h(async (req, res) => {
   res.json({ success: true });
 }));
 
+// ----------------------------------------------------
+// MULTI-DOCUMENT SECURE TRANSFERS
+// ----------------------------------------------------
+function transferExpired(t: SecureTransfer): boolean {
+  return new Date(t.expiresAt).getTime() <= Date.now();
+}
+
+function transferExhausted(t: SecureTransfer): boolean {
+  return t.maxDownloads != null && t.downloadCount >= t.maxDownloads;
+}
+
+function canManageTransfer(user: StoredUser, transfer: SecureTransfer): boolean {
+  return transfer.institutionId === user.institutionId
+    && (transfer.createdBy === user.id || user.role === 'Admin');
+}
+
+app.get('/api/transfers', h(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+  const transfers = (await db().listTransfers())
+    .filter(t => t.institutionId === user.institutionId && (t.createdBy === user.id || user.role === 'Admin' || user.role === 'Auditor'))
+    .map(t => publicTransfer(t, true));
+  res.json(transfers);
+}));
+
+app.post('/api/transfers', h(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+  if (user.role === 'Viewer' || user.role === 'Auditor') {
+    return res.status(403).json({ error: 'Your role cannot create transfers.' });
+  }
+
+  const documentIds: string[] = Array.isArray(req.body?.documentIds)
+    ? [...new Set<string>(req.body.documentIds.map((id: unknown) => String(id)))]
+    : [];
+  if (documentIds.length < 1 || documentIds.length > 50) {
+    return res.status(400).json({ error: 'Select between 1 and 50 documents.' });
+  }
+  const title = String(req.body?.title || '').trim();
+  if (!title || title.length > 160) return res.status(400).json({ error: 'Transfer title must be 1 to 160 characters.' });
+  const message = String(req.body?.message || '').trim();
+  if (message.length > 2000) return res.status(400).json({ error: 'Transfer message cannot exceed 2,000 characters.' });
+
+  const recipients = (Array.isArray(req.body?.recipientEmails)
+    ? req.body.recipientEmails
+    : String(req.body?.recipientEmails || '').split(','))
+    .map((email: unknown) => String(email).trim().toLowerCase())
+    .filter((email: string, index: number, all: string[]) =>
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && all.indexOf(email) === index)
+    .slice(0, 20);
+  const rawRecipients = Array.isArray(req.body?.recipientEmails)
+    ? req.body.recipientEmails
+    : String(req.body?.recipientEmails || '').split(',').filter(Boolean);
+  if (rawRecipients.length > 0 && recipients.length !== rawRecipients.length) {
+    return res.status(400).json({ error: 'One or more recipient email addresses are invalid or duplicated.' });
+  }
+  if (recipients.length > 0 && await rateLimited(`transfer-email:${user.id}`, 5)) {
+    return res.status(429).json({ error: 'Too many emailed transfers. Try again later.' });
+  }
+
+  const days = Number(req.body?.expiresInDays ?? 7);
+  if (!Number.isInteger(days) || days < 1 || days > 365) {
+    return res.status(400).json({ error: 'Expiry must be between 1 and 365 days.' });
+  }
+  const maxDownloads = req.body?.maxDownloads == null || req.body.maxDownloads === ''
+    ? null : Number(req.body.maxDownloads);
+  if (maxDownloads !== null && (!Number.isInteger(maxDownloads) || maxDownloads < 1 || maxDownloads > 10_000)) {
+    return res.status(400).json({ error: 'Maximum downloads must be an integer from 1 to 10,000.' });
+  }
+  const password = String(req.body?.password || '').trim();
+  if (password && (password.length < 10 || password.length > 128)) {
+    return res.status(400).json({ error: 'Transfer passwords must be 10 to 128 characters.' });
+  }
+
+  const now = new Date().toISOString();
+  const transferId = newId('transfer');
+  const items: TransferItem[] = [];
+  let containsConfidential = false;
+  for (const documentId of documentIds) {
+    const doc = await db().getDocument(documentId);
+    if (!doc || doc.isDeleted) return res.status(404).json({ error: 'A selected document is unavailable.' });
+    if (!(await canEditDocument(user, doc))) {
+      return res.status(403).json({ error: `You cannot transfer "${doc.title}". Editor access is required.` });
+    }
+    if (doc.confidentialityLevel === 'Confidential') containsConfidential = true;
+    const version = latestOf(await db().listVersions(doc.id));
+    if (!version) return res.status(409).json({ error: `"${doc.title}" has no file version.` });
+    items.push({
+      id: newId('transfer-item'), transferId, documentId: doc.id, versionId: version.id,
+      fileName: version.fileName || doc.title, fileSize: version.fileSize || 0,
+      fileType: version.fileType || 'unknown', createdAt: now
+    });
+  }
+  if (containsConfidential && user.role !== 'Admin') {
+    return res.status(403).json({ error: 'Only an Admin may externally transfer confidential documents.' });
+  }
+  if (containsConfidential && !password) {
+    return res.status(400).json({ error: 'A password is required when a transfer contains confidential documents.' });
+  }
+
+  const transfer: SecureTransfer = {
+    id: transferId,
+    institutionId: user.institutionId || DEFAULT_INSTITUTION_ID,
+    createdBy: user.id,
+    createdByName: user.fullName,
+    title,
+    message: message || undefined,
+    token: `transfer-${crypto.randomBytes(24).toString('hex')}`,
+    shortCode: await genShortCode(),
+    expiresAt: new Date(Date.now() + days * 86400000).toISOString(),
+    isActive: true,
+    accessCount: 0,
+    downloadCount: 0,
+    maxDownloads,
+    requiresPassword: Boolean(password),
+    passwordHash: password ? hashPassword(password) : undefined,
+    createdAt: now,
+    updatedAt: now,
+    items,
+    recipients: recipients.map((email: string): TransferRecipient => ({
+      id: newId('transfer-recipient'), transferId, email, downloadCount: 0
+    }))
+  };
+  await db().createTransfer(transfer);
+
+  const transferUrl = `${requestBaseUrl(req)}/t/${transfer.shortCode}`;
+  const mail = externalLinkSharedEmail({
+    sharerName: user.fullName,
+    documentTitle: `${title} (${items.length} file${items.length === 1 ? '' : 's'})`,
+    message: message || undefined,
+    linkUrl: transferUrl,
+    requiresPassword: transfer.requiresPassword,
+    allowDownload: true,
+    expiresAt: transfer.expiresAt
+  });
+  const emailsSent: string[] = [];
+  for (const email of recipients) {
+    if (await sendEmail({ to: email, ...mail })) emailsSent.push(email);
+  }
+  await logActivity(user, 'Create Transfer', undefined, undefined,
+    `Created "${title}" with ${items.length} immutable file version(s) for ${recipients.length} recipient(s).`);
+  res.status(201).json({ success: true, transfer: publicTransfer(transfer, true), url: transferUrl, emailsSent });
+}));
+
+app.post('/api/transfers/:id/revoke', h(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+  const transfer = await db().getTransfer(req.params.id);
+  if (!transfer) return res.status(404).json({ error: 'Transfer not found.' });
+  if (!canManageTransfer(user, transfer)) return res.status(403).json({ error: 'You cannot revoke this transfer.' });
+  await db().updateTransfer(transfer.id, { isActive: false });
+  await logActivity(user, 'Revoke Transfer', undefined, undefined, `Revoked "${transfer.title}".`);
+  res.json({ success: true });
+}));
+
+app.post('/api/transfers/:id/extend', h(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) return;
+  const transfer = await db().getTransfer(req.params.id);
+  if (!transfer) return res.status(404).json({ error: 'Transfer not found.' });
+  if (!canManageTransfer(user, transfer)) return res.status(403).json({ error: 'You cannot extend this transfer.' });
+  const days = Number(req.body?.days ?? 7);
+  if (!Number.isInteger(days) || days < 1 || days > 365) return res.status(400).json({ error: 'Extension must be 1 to 365 days.' });
+  const base = Math.max(Date.now(), new Date(transfer.expiresAt).getTime());
+  const expiresAt = new Date(base + days * 86400000).toISOString();
+  await db().updateTransfer(transfer.id, { expiresAt, isActive: true });
+  await logActivity(user, 'Extend Transfer', undefined, undefined, `Extended "${transfer.title}" by ${days} day(s).`);
+  res.json({ success: true, expiresAt });
+}));
+
+app.get('/api/transfer/:token', h(async (req, res) => {
+  const transfer = await db().getTransferByToken(req.params.token);
+  if (!transfer) return res.status(404).json({ error: 'This transfer is invalid.' });
+  const expired = transferExpired(transfer);
+  const exhausted = transferExhausted(transfer);
+  res.json({
+    id: transfer.id,
+    title: transfer.requiresPassword ? 'Protected transfer' : transfer.title,
+    message: transfer.requiresPassword ? undefined : transfer.message,
+    expiresAt: transfer.expiresAt,
+    isActive: transfer.isActive,
+    requiresPassword: transfer.requiresPassword,
+    downloadCount: transfer.downloadCount,
+    maxDownloads: transfer.maxDownloads,
+    expired,
+    exhausted,
+    files: transfer.requiresPassword ? [] : transfer.items.map(item => ({
+      id: item.id, fileName: item.fileName, fileSize: item.fileSize, fileType: item.fileType
+    }))
+  });
+}));
+
 // Comments
 app.post('/api/comments', h(async (req, res) => {
   const user = await requireUser(req, res);
@@ -2948,6 +3152,29 @@ export async function deactivateExpiredExternalLinks(now: number = Date.now()): 
   return { deactivated, failed };
 }
 
+export async function deactivateExpiredTransfers(now: number = Date.now()): Promise<{ deactivated: number; failed: number }> {
+  await ensureRuntimeReady();
+  const transfers = await db().listTransfers();
+  let deactivated = 0;
+  let failed = 0;
+  for (const transfer of transfers) {
+    const expired = new Date(transfer.expiresAt).getTime() <= now;
+    const exhausted = transfer.maxDownloads != null && transfer.downloadCount >= transfer.maxDownloads;
+    if (!transfer.isActive || (!expired && !exhausted)) continue;
+    try {
+      await db().updateTransfer(transfer.id, { isActive: false });
+      deactivated++;
+    } catch (err) {
+      failed++;
+      console.error(`[transfers] failed to deactivate ${transfer.id}:`, (err as Error).message);
+    }
+  }
+  if (deactivated > 0 || failed > 0) {
+    console.log(`[transfers] lifecycle sweep: ${deactivated} transfer(s) closed, ${failed} failed.`);
+  }
+  return { deactivated, failed };
+}
+
 interface StorageListEntry {
   id?: string | null;
   name: string;
@@ -3048,6 +3275,11 @@ export async function runNightlyMaintenance(): Promise<void> {
     await deactivateExpiredExternalLinks();
   } catch (err) {
     console.error('[links] lifecycle sweep failed:', (err as Error).message);
+  }
+  try {
+    await deactivateExpiredTransfers();
+  } catch (err) {
+    console.error('[transfers] lifecycle sweep failed:', (err as Error).message);
   }
   try {
     await cleanupAbandonedDirectUploads();
@@ -3162,6 +3394,109 @@ button{width:100%;margin-top:.8rem;padding:.65rem;border:0;border-radius:9px;bac
 ${wrong ? '<div class="err">Incorrect password. Try again.</div>' : ''}
 </form></body></html>`;
 }
+
+function escapeTransferHtml(value: string): string {
+  return value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+}
+
+function transferCookieName(id: string): string {
+  return 'transfer_' + sha256Hex(id).slice(0, 16);
+}
+
+function transferIsUnlocked(req: express.Request, transfer: SecureTransfer): boolean {
+  if (!transfer.requiresPassword) return true;
+  return verifySession(parseCookies(req)[transferCookieName(transfer.id)] || '') === 'transfer:' + transfer.id;
+}
+
+function transferLandingHtml(transfer: SecureTransfer): string {
+  const files = transfer.items.map(item =>
+    '<li><div><strong>' + escapeTransferHtml(item.fileName) + '</strong><small>' +
+    (item.fileSize / 1024 / 1024).toFixed(2) + ' MB</small></div><a href="/t/' +
+    encodeURIComponent(transfer.shortCode) + '/files/' + encodeURIComponent(item.id) + '">Download</a></li>'
+  ).join('');
+  const remaining = transfer.maxDownloads == null ? '' :
+    ' · ' + Math.max(0, transfer.maxDownloads - transfer.downloadCount) + ' downloads remaining';
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>' + escapeTransferHtml(transfer.title) + ' — AVDP Transfer</title>' +
+    '<style>body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center}.card{width:min(620px,92vw);background:#fff;color:#0f172a;border-radius:20px;padding:28px;box-shadow:0 24px 70px #02061780}h1{font-size:24px;margin:0 0 6px}p{color:#64748b;white-space:pre-wrap}ul{list-style:none;padding:0;margin:24px 0;display:grid;gap:10px}li{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid #e2e8f0;border-radius:12px;padding:12px}small{display:block;color:#94a3b8;margin-top:3px}a{background:#4f46e5;color:#fff;text-decoration:none;padding:9px 14px;border-radius:10px;font-weight:700;font-size:13px}.meta{font-size:12px;color:#94a3b8;border-top:1px solid #e2e8f0;padding-top:14px}</style></head>' +
+    '<body><main class="card"><div class="meta">AVDP SECURE TRANSFER · ' + transfer.items.length + ' FILE' +
+    (transfer.items.length === 1 ? '' : 'S') + '</div><h1>' + escapeTransferHtml(transfer.title) + '</h1>' +
+    (transfer.message ? '<p>' + escapeTransferHtml(transfer.message) + '</p>' : '') +
+    '<ul>' + files + '</ul><div class="meta">Expires ' +
+    escapeTransferHtml(new Date(transfer.expiresAt).toUTCString()) + remaining + '</div></main></body></html>';
+}
+
+async function serveTransferLanding(req: express.Request, res: express.Response, transfer: SecureTransfer | null) {
+  if (!transfer) return res.status(404).send('This transfer is invalid.');
+  if (transferExpired(transfer)) return res.status(410).send('This transfer has expired.');
+  if (transferExhausted(transfer)) return res.status(410).send('This transfer has reached its download limit.');
+  if (!transfer.isActive) return res.status(403).send('This transfer has been revoked.');
+  if (!transferIsUnlocked(req, transfer)) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(passwordGateHtml(req.path + '/unlock', req.query.error === '1'));
+  }
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  return res.send(transferLandingHtml(transfer));
+}
+
+async function unlockTransfer(req: express.Request, res: express.Response, transfer: SecureTransfer | null) {
+  if (!transfer || !transfer.requiresPassword || !transfer.passwordHash || !transfer.isActive
+    || transferExpired(transfer) || transferExhausted(transfer)) {
+    return res.status(404).send('This protected transfer is invalid.');
+  }
+  const rateKey = 'transfer:' + transfer.id + ':' + requestIp(req);
+  if (await rateLimited(rateKey, 10)) return res.status(429).send('Too many attempts. Try again later.');
+  if (!verifyPassword(String(req.body?.pw || ''), transfer.passwordHash)) {
+    return res.redirect(303, req.path.replace(/\/unlock$/, '') + '?error=1');
+  }
+  await clearRateLimit(rateKey);
+  setSignedCookie(req, res, transferCookieName(transfer.id), 'transfer:' + transfer.id, 15 * 60 * 1000);
+  return res.redirect(303, req.path.replace(/\/unlock$/, ''));
+}
+
+async function serveTransferFile(req: express.Request, res: express.Response, transfer: SecureTransfer | null) {
+  if (!transfer) return res.status(404).send('This transfer is invalid.');
+  if (transferExpired(transfer)) return res.status(410).send('This transfer has expired.');
+  if (transferExhausted(transfer)) return res.status(410).send('This transfer has reached its download limit.');
+  if (!transfer.isActive) return res.status(403).send('This transfer has been revoked.');
+  if (!transferIsUnlocked(req, transfer)) return res.status(401).send('Unlock this transfer before downloading.');
+  const item = transfer.items.find(candidate => candidate.id === req.params.itemId);
+  if (!item) return res.status(404).send('This transfer file is unavailable.');
+  const version = await db().getVersion(item.versionId);
+  if (!version || version.documentId !== item.documentId) return res.status(404).send('This file version is unavailable.');
+  const consumed = await db().consumeTransfer(transfer.id, true);
+  if (!consumed) return res.status(410).send('This transfer is no longer available.');
+  const creator = await db().getUser(transfer.createdBy);
+  await logActivity(
+    creator || { id: transfer.createdBy, fullName: transfer.createdByName, role: 'Viewer' },
+    'Transfer Download', item.documentId, item.fileName,
+    'Downloaded from transfer "' + transfer.title + '" (#' + consumed.downloadCount + ').'
+  );
+  if (version.storagePath) {
+    const url = await signedUrlFor(version.storagePath, { download: version.fileName });
+    if (url) return res.redirect(302, url);
+  }
+  if (!version.fileData) return res.status(404).send('Stored file content is unavailable.');
+  res.setHeader('Content-Type', mimeForType(version.fileType));
+  res.setHeader('Content-Disposition', 'attachment; filename="' + safeDownloadName(version.fileName) + '"');
+  return res.send(storedFileToBuffer(version.fileData));
+}
+
+app.get('/t/:code', h(async (req, res) => {
+  await serveTransferLanding(req, res, await db().getTransferByCode(req.params.code));
+}));
+app.post('/t/:code/unlock', h(async (req, res) => {
+  await unlockTransfer(req, res, await db().getTransferByCode(req.params.code));
+}));
+app.get('/t/:code/files/:itemId', h(async (req, res) => {
+  await serveTransferFile(req, res, await db().getTransferByCode(req.params.code));
+}));
+app.post('/api/transfer/:token/unlock', h(async (req, res) => {
+  await unlockTransfer(req, res, await db().getTransferByToken(req.params.token));
+}));
+app.get('/api/transfer/:token/files/:itemId', h(async (req, res) => {
+  await serveTransferFile(req, res, await db().getTransferByToken(req.params.token));
+}));
 
 async function serveSharedLink(req: express.Request, res: express.Response, link: ExternalShareLink | null) {
   if (!link) return res.status(404).send('This share link is invalid.');

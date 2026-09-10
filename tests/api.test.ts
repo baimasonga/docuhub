@@ -110,6 +110,18 @@ test('external-link migration pins immutable versions and indexes lifecycle quer
   assert.match(sql, /external_share_links_lifecycle_idx/i);
 });
 
+test('secure-transfer migration is private and consumes downloads atomically', () => {
+  const sql = fs.readFileSync(
+    path.join(process.cwd(), 'supabase/migrations/20260910124000_create_secure_transfers.sql'),
+    'utf8'
+  );
+  assert.match(sql, /create table if not exists public\.secure_transfers/i);
+  assert.match(sql, /alter table public\.secure_transfers enable row level security/i);
+  assert.match(sql, /revoke all on public\.secure_transfers.*anon.*authenticated/is);
+  assert.match(sql, /docuhub_consume_transfer/i);
+  assert.match(sql, /version_id text not null references public\.document_versions/i);
+});
+
 test('protected endpoints reject unauthenticated requests', async () => {
   for (const p of ['/api/documents', '/api/users', '/api/stats', '/api/folders', '/api/activity']) {
     const res = await api(null, 'GET', p);
@@ -455,6 +467,109 @@ test('an external link remains pinned to the version that was shared', async () 
   assert.equal(await shared.text(), firstText, 'the old link must not silently switch to v2');
 });
 
+test('secure transfer delivers multiple immutable versions with an atomic package limit', async () => {
+  const secondBody = 'second transfer file';
+  const uploaded = await api('admin', 'POST', '/api/documents/upload', {
+    title: 'Transfer second fixture', fileName: 'second.txt', fileType: 'text/plain',
+    fileSize: Buffer.byteLength(secondBody), fileData: Buffer.from(secondBody).toString('base64'),
+    autoFile: false, folderId: null
+  });
+  assert.equal(uploaded.status, 201);
+  const secondId = (await uploaded.json()).document.id;
+
+  const created = await api('admin', 'POST', '/api/transfers', {
+    documentIds: [docId, secondId],
+    title: 'Procurement package',
+    message: 'Two immutable files',
+    recipientEmails: ['recipient@example.com'],
+    expiresInDays: 7,
+    maxDownloads: 2
+  });
+  assert.equal(created.status, 201);
+  const payload = await created.json();
+  assert.equal(payload.transfer.items.length, 2);
+  assert.equal(payload.transfer.recipients.length, 1);
+  assert.ok(!('passwordHash' in payload.transfer));
+  assert.ok(!('token' in payload.transfer));
+
+  const listing = await api('admin', 'GET', '/api/transfers');
+  assert.equal(listing.status, 200);
+  assert.ok((await listing.json()).some((transfer: any) => transfer.id === payload.transfer.id));
+
+  const landing = await api(null, 'GET', '/t/' + payload.transfer.shortCode);
+  assert.equal(landing.status, 200);
+  assert.match(await landing.text(), /Procurement package/);
+
+  const itemA = payload.transfer.items[0];
+  const itemB = payload.transfer.items[1];
+  const replacement = 'new content that must not replace the transfer snapshot';
+  const nextVersion = await api('admin', 'POST', `/api/documents/${secondId}/version`, {
+    fileName: 'second-new.txt', fileType: 'text/plain', fileSize: Buffer.byteLength(replacement),
+    fileData: Buffer.from(replacement).toString('base64')
+  });
+  assert.equal(nextVersion.status, 200);
+  assert.equal((await api(null, 'GET', '/t/' + payload.transfer.shortCode + '/files/' + itemA.id)).status, 200);
+  const pinned = await api(null, 'GET', '/t/' + payload.transfer.shortCode + '/files/' + itemB.id);
+  assert.equal(pinned.status, 200);
+  assert.equal(await pinned.text(), secondBody, 'the transfer must keep serving the selected immutable version');
+  assert.equal((await api(null, 'GET', '/t/' + payload.transfer.shortCode + '/files/' + itemA.id)).status, 410);
+
+  const staffAttempt = await api('staff', 'POST', '/api/transfers', {
+    documentIds: [docId], title: 'Unauthorized transfer'
+  });
+  assert.equal(staffAttempt.status, 403, 'viewer-level access must not create an external transfer');
+});
+
+test('password-protected transfers hide file metadata until unlocked and can be revoked', async () => {
+  const weak = await api('admin', 'POST', '/api/transfers', {
+    documentIds: [docId], title: 'Weak password', password: 'short'
+  });
+  assert.equal(weak.status, 400);
+
+  const created = await api('admin', 'POST', '/api/transfers', {
+    documentIds: [docId], title: 'Protected package', password: 'TransferSecret99', expiresInDays: 7
+  });
+  assert.equal(created.status, 201);
+  const payload = await created.json();
+  const metadata = await api(null, 'GET', '/api/transfer/' + payload.transfer.id);
+  assert.equal(metadata.status, 404, 'internal ids are not public transfer tokens');
+
+  const locked = await api(null, 'GET', '/t/' + payload.transfer.shortCode);
+  assert.equal(locked.status, 200);
+  const lockedHtml = await locked.text();
+  assert.match(lockedHtml, /protected/i);
+  assert.doesNotMatch(lockedHtml, new RegExp(payload.transfer.items[0].fileName));
+
+  const wrong = await fetch(baseUrl + '/t/' + payload.transfer.shortCode + '/unlock', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ pw: 'WrongPassword99' }),
+    redirect: 'manual'
+  });
+  assert.equal(wrong.status, 303);
+  assert.match(wrong.headers.get('location') || '', /error=1/);
+
+  const unlock = await fetch(baseUrl + '/t/' + payload.transfer.shortCode + '/unlock', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ pw: 'TransferSecret99' }),
+    redirect: 'manual'
+  });
+  assert.equal(unlock.status, 303);
+  const transferCookie = (unlock.headers.get('set-cookie') || '').split(';')[0];
+  assert.match(transferCookie, /^transfer_/);
+  const opened = await fetch(baseUrl + '/t/' + payload.transfer.shortCode, {
+    headers: { Cookie: transferCookie },
+    redirect: 'manual'
+  });
+  assert.equal(opened.status, 200);
+  assert.match(await opened.text(), /Protected package/);
+
+  const revoke = await api('admin', 'POST', '/api/transfers/' + payload.transfer.id + '/revoke', {});
+  assert.equal(revoke.status, 200);
+  assert.equal((await api(null, 'GET', '/t/' + payload.transfer.shortCode)).status, 403);
+});
+
 test('security validation rejects active content and invalid permissions', async () => {
   const activeContent = Buffer.from('<script>alert(1)</script>').toString('base64');
   const upload = await api('admin', 'POST', '/api/documents/upload', {
@@ -748,8 +863,8 @@ test('logout clears the session', async () => {
   assert.equal(after.status, 401);
 });
 
-test('nightly link lifecycle closes expired links and storage cleanup is safe without Storage', async () => {
-  const { deactivateExpiredExternalLinks, cleanupAbandonedDirectUploads } = await import('../server');
+test('nightly sharing lifecycle closes expired links and transfers', async () => {
+  const { deactivateExpiredExternalLinks, deactivateExpiredTransfers, cleanupAbandonedDirectUploads } = await import('../server');
   const created = await api('admin', 'POST', `/api/documents/${docId}/external-link`, {
     expiresInDays: 1, requiresPassword: true, password: 'LifecycleTest99'
   });
@@ -759,6 +874,16 @@ test('nightly link lifecycle closes expired links and storage cleanup is safe wi
   const swept = await deactivateExpiredExternalLinks(Date.now() + 2 * 86400000);
   assert.ok(swept.deactivated >= 1);
   assert.equal((await api(null, 'GET', `/s/${link.shortCode}`)).status, 403, 'closed links cannot be used');
+
+  const createdTransfer = await api('admin', 'POST', '/api/transfers', {
+    documentIds: [docId], title: 'Lifecycle transfer', expiresInDays: 1,
+    password: 'LifecycleTransfer99'
+  });
+  assert.equal(createdTransfer.status, 201);
+  const { transfer } = await createdTransfer.json();
+  const transferSweep = await deactivateExpiredTransfers(Date.now() + 2 * 86400000);
+  assert.ok(transferSweep.deactivated >= 1);
+  assert.equal((await api(null, 'GET', `/t/${transfer.shortCode}`)).status, 403, 'closed transfers cannot be used');
 
   const storage = await cleanupAbandonedDirectUploads();
   assert.deepEqual(storage, { scanned: 0, removed: 0, failed: 0, skipped: true });

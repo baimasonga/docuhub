@@ -25,6 +25,7 @@ import {
   ActivityLog,
   Comment,
   ExternalShareLink,
+  SecureTransfer,
   Institution,
   Notification,
   BackupRun
@@ -151,6 +152,15 @@ export interface DataStore {
   updateLink(id: string, patch: Partial<ExternalShareLink>): Promise<void>;
   consumeExternalLink(id: string, countDownload: boolean): Promise<ExternalShareLink | null>;
   listAllLinks(): Promise<ExternalShareLink[]>;
+
+  // Multi-document secure transfers
+  getTransfer(id: string): Promise<SecureTransfer | null>;
+  getTransferByToken(token: string): Promise<SecureTransfer | null>;
+  getTransferByCode(code: string): Promise<SecureTransfer | null>;
+  listTransfers(): Promise<SecureTransfer[]>;
+  createTransfer(transfer: SecureTransfer): Promise<void>;
+  updateTransfer(id: string, patch: Partial<SecureTransfer>): Promise<void>;
+  consumeTransfer(id: string, countDownload: boolean): Promise<SecureTransfer | null>;
 
   // External backup runs (e.g. to iDrive e2)
   listBackupRuns(limit?: number): Promise<BackupRun[]>;
