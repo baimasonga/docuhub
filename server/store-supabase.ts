@@ -175,6 +175,7 @@ const notificationToRow = (n: Partial<Notification>): Row => omitUndefined({
 
 const linkFromRow = (r: Row): ExternalShareLink => ({
   id: r.id, documentId: r.document_id, token: r.token,
+  versionId: r.version_id ?? undefined,
   shortCode: r.short_code ?? undefined, createdBy: r.created_by,
   permissionType: r.permission_type, expiresAt: r.expires_at,
   isActive: r.is_active, accessCount: r.access_count || 0,
@@ -186,7 +187,8 @@ const linkFromRow = (r: Row): ExternalShareLink => ({
 });
 const linkToRow = (l: Partial<ExternalShareLink>): Row => {
   const row = omitUndefined({
-    id: l.id, document_id: l.documentId, token: l.token, short_code: l.shortCode,
+    id: l.id, document_id: l.documentId, version_id: l.versionId,
+    token: l.token, short_code: l.shortCode,
     created_by: l.createdBy, permission_type: l.permissionType, expires_at: l.expiresAt,
     is_active: l.isActive, access_count: l.accessCount, created_at: l.createdAt,
     file_name: l.fileName, file_size: l.fileSize, file_type: l.fileType,

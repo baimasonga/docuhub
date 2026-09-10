@@ -267,6 +267,64 @@ async function downloadStoredFile(objectPath: string): Promise<Buffer | null> {
   return Buffer.from(await data.arrayBuffer());
 }
 
+interface StoredFileInspection {
+  prefix: Buffer;
+  size: number;
+}
+
+// Validate a direct upload without pulling the complete object through the
+// Worker. Cloudflare isolates have a fixed memory ceiling, so even a valid
+// transfer-sized object must never be buffered merely to inspect its magic
+// bytes. Supabase Storage supports HTTP range requests on signed URLs.
+async function inspectStoredFile(objectPath: string): Promise<StoredFileInspection | null> {
+  const url = await signedUrlFor(objectPath);
+  if (!url) return null;
+  const response = await fetch(url, { headers: { Range: 'bytes=0-4095' } });
+  if (response.status !== 206) {
+    await response.body?.cancel().catch(() => undefined);
+    console.error(`[storage] range inspection failed for ${objectPath}: HTTP ${response.status}`);
+    return null;
+  }
+  const match = /\/([0-9]+)$/.exec(response.headers.get('content-range') || '');
+  const size = match ? Number(match[1]) : NaN;
+  if (!Number.isSafeInteger(size) || size <= 0) {
+    await response.body?.cancel().catch(() => undefined);
+    console.error(`[storage] range inspection returned an invalid size for ${objectPath}.`);
+    return null;
+  }
+  return { prefix: Buffer.from(await response.arrayBuffer()), size };
+}
+
+async function removePendingStorageObject(objectPath: unknown): Promise<void> {
+  if (typeof objectPath !== 'string' || !objectPath.startsWith('direct/') || !storageEnabled || !supabase) return;
+  const { error } = await supabase.storage.from(STORAGE_BUCKET).remove([objectPath]);
+  if (error) console.error(`[storage] failed to remove rejected direct upload ${objectPath}:`, error.message);
+}
+
+async function inspectIncomingUpload(
+  fileName: unknown,
+  fileType: unknown,
+  declaredSize: unknown,
+  fileData: unknown,
+  storagePath: unknown
+): Promise<{ buffer: Buffer | null; error: string | null }> {
+  if (fileData) {
+    const buffer = storedFileToBuffer(String(fileData));
+    return { buffer, error: validateUploadFile(fileName, fileType, declaredSize, buffer) };
+  }
+  if (typeof storagePath !== 'string') return { buffer: null, error: 'Uploaded file content could not be verified.' };
+  const inspected = await inspectStoredFile(storagePath);
+  if (!inspected) return { buffer: null, error: 'Uploaded file content could not be verified.' };
+  const claimedSize = Number(declaredSize);
+  if (!Number.isSafeInteger(claimedSize) || claimedSize !== inspected.size) {
+    return { buffer: inspected.prefix, error: 'The uploaded object size does not match the declared file size.' };
+  }
+  return {
+    buffer: inspected.prefix,
+    error: validateUploadFile(fileName, fileType, inspected.size, inspected.prefix)
+  };
+}
+
 // Raw bytes for a version regardless of where they live -- inline in
 // Postgres (small/legacy files) or offloaded to Supabase Storage. Used by
 // the external backup job, which needs the actual bytes to re-upload
@@ -1837,14 +1895,10 @@ app.post('/api/documents/upload', h(async (req, res) => {
   if (storagePath && !verifyUploadClaim(storagePath, user.id, uploadClaim)) {
     return res.status(403).json({ error: 'This storagePath was not issued to you, or has already been used.' });
   }
-  const incomingBuffer = fileData
-    ? storedFileToBuffer(String(fileData))
-    : storagePath ? await downloadStoredFile(String(storagePath)) : null;
-  if (!incomingBuffer) return res.status(400).json({ error: 'Uploaded file content could not be verified.' });
-  const uploadValidation = validateUploadFile(fileName, fileType, fileSize, incomingBuffer);
-  if (uploadValidation) {
-    if (storagePath && storageEnabled && supabase) await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]);
-    return res.status(400).json({ error: uploadValidation });
+  const inspectedUpload = await inspectIncomingUpload(fileName, fileType, fileSize, fileData, storagePath);
+  if (inspectedUpload.error || !inspectedUpload.buffer) {
+    await removePendingStorageObject(storagePath);
+    return res.status(400).json({ error: inspectedUpload.error || 'Uploaded file content could not be verified.' });
   }
 
   const manualCategory = coerceDocumentCategory(documentType);
@@ -1964,14 +2018,10 @@ app.post('/api/documents/:id/version', h(async (req, res) => {
   if (storagePath && !verifyUploadClaim(storagePath, user.id, uploadClaim)) {
     return res.status(403).json({ error: 'This storagePath was not issued to you, or has already been used.' });
   }
-  const incomingBuffer = fileData
-    ? storedFileToBuffer(String(fileData))
-    : storagePath ? await downloadStoredFile(String(storagePath)) : null;
-  if (!incomingBuffer) return res.status(400).json({ error: 'Uploaded file content could not be verified.' });
-  const versionValidation = validateUploadFile(fileName, fileType, fileSize, incomingBuffer);
-  if (versionValidation) {
-    if (storagePath && storageEnabled && supabase) await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]);
-    return res.status(400).json({ error: versionValidation });
+  const inspectedUpload = await inspectIncomingUpload(fileName, fileType, fileSize, fileData, storagePath);
+  if (inspectedUpload.error || !inspectedUpload.buffer) {
+    await removePendingStorageObject(storagePath);
+    return res.status(400).json({ error: inspectedUpload.error || 'Uploaded file content could not be verified.' });
   }
 
   try {
@@ -2494,11 +2544,13 @@ app.post('/api/documents/:id/external-link', h(async (req, res) => {
 
   const versions = await db().listVersions(docId);
   const latest = latestOf(versions);
+  if (!latest) return res.status(409).json({ error: 'This document has no file version to share.' });
   const token = `ext-${crypto.randomBytes(16).toString('hex')}`;
 
   const extLink: ExternalShareLink = {
     id: newId('ext-link'),
     documentId: docId,
+    versionId: latest.id,
     token,
     shortCode: await genShortCode(),
     createdBy: user.id,
@@ -2871,6 +2923,95 @@ export async function purgeExpiredTrash(now: number = Date.now()): Promise<{ pur
   return { purged, failed, skipped: false };
 }
 
+// Keep historical link rows for auditability, but close links once they can no
+// longer be used so dashboards and operational queries reflect reality.
+export async function deactivateExpiredExternalLinks(now: number = Date.now()): Promise<{ deactivated: number; failed: number }> {
+  await ensureRuntimeReady();
+  const links = await db().listAllLinks();
+  let deactivated = 0;
+  let failed = 0;
+  for (const link of links) {
+    const expired = new Date(link.expiresAt).getTime() <= now;
+    const exhausted = link.maxDownloads != null && (link.downloadCount || 0) >= link.maxDownloads;
+    if (!link.isActive || (!expired && !exhausted)) continue;
+    try {
+      await db().updateLink(link.id, { isActive: false });
+      deactivated++;
+    } catch (err) {
+      failed++;
+      console.error(`[links] failed to deactivate ${link.id}:`, (err as Error).message);
+    }
+  }
+  if (deactivated > 0 || failed > 0) {
+    console.log(`[links] lifecycle sweep: ${deactivated} link(s) closed, ${failed} failed.`);
+  }
+  return { deactivated, failed };
+}
+
+interface StorageListEntry {
+  id?: string | null;
+  name: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  metadata?: unknown;
+}
+
+async function listStorageFiles(prefix: string): Promise<Array<StorageListEntry & { path: string }>> {
+  if (!supabase) return [];
+  const output: Array<StorageListEntry & { path: string }> = [];
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await supabase.storage.from(STORAGE_BUCKET).list(prefix, {
+      limit: pageSize,
+      offset,
+      sortBy: { column: 'name', order: 'asc' }
+    });
+    if (error) throw new Error(`Could not list Storage prefix ${prefix}: ${error.message}`);
+    const entries = (data || []) as StorageListEntry[];
+    for (const entry of entries) {
+      const pathName = `${prefix}/${entry.name}`;
+      if (entry.id || entry.metadata) output.push({ ...entry, path: pathName });
+      else output.push(...await listStorageFiles(pathName));
+    }
+    if (entries.length < pageSize) break;
+  }
+  return output;
+}
+
+const ABANDONED_DIRECT_UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
+
+// Signed uploads begin under direct/. If the browser disappears before the
+// document row is finalized, no version references that object. Remove only
+// unreferenced objects older than 24 hours; recent uploads may still be in
+// flight or waiting for their finalize request.
+export async function cleanupAbandonedDirectUploads(now: number = Date.now()): Promise<{
+  scanned: number; removed: number; failed: number; skipped: boolean;
+}> {
+  await ensureRuntimeReady();
+  if (!storageEnabled || !supabase) return { scanned: 0, removed: 0, failed: 0, skipped: true };
+  const files = await listStorageFiles('direct');
+  const cutoff = now - ABANDONED_DIRECT_UPLOAD_TTL_MS;
+  let removed = 0;
+  let failed = 0;
+  for (const file of files) {
+    const timestamp = Date.parse(file.created_at || file.updated_at || '');
+    if (!Number.isFinite(timestamp) || timestamp > cutoff) continue;
+    try {
+      if (await db().countVersionsWithStoragePath(file.path) !== 0) continue;
+      const { error } = await supabase.storage.from(STORAGE_BUCKET).remove([file.path]);
+      if (error) throw new Error(error.message);
+      removed++;
+    } catch (err) {
+      failed++;
+      console.error(`[storage] abandoned-upload cleanup failed for ${file.path}:`, (err as Error).message);
+    }
+  }
+  if (removed > 0 || failed > 0) {
+    console.log(`[storage] abandoned-upload sweep: ${removed} object(s) removed, ${failed} failed.`);
+  }
+  return { scanned: files.length, removed, failed, skipped: false };
+}
+
 export async function runScheduledBackup(): Promise<void> {
   await ensureRuntimeReady();
   const target = backupTargetFromEnv(process.env);
@@ -2902,6 +3043,16 @@ export async function runNightlyMaintenance(): Promise<void> {
     await purgeExpiredTrash();
   } catch (err) {
     console.error('[trash] retention purge failed:', (err as Error).message);
+  }
+  try {
+    await deactivateExpiredExternalLinks();
+  } catch (err) {
+    console.error('[links] lifecycle sweep failed:', (err as Error).message);
+  }
+  try {
+    await cleanupAbandonedDirectUploads();
+  } catch (err) {
+    console.error('[storage] abandoned-upload sweep failed:', (err as Error).message);
   }
 }
 
@@ -2973,10 +3124,10 @@ app.get('/api/approvals/mine', h(async (req, res) => {
 app.get('/api/share/:token', h(async (req, res) => {
   const link = await db().getLinkByToken(req.params.token);
   if (!link) return res.status(404).json({ error: 'This share link is invalid.' });
-  if (!link.isActive) return res.status(403).json({ error: 'This share link has been revoked.' });
 
   const expired = new Date(link.expiresAt).getTime() < Date.now();
   const exhausted = link.maxDownloads != null && (link.downloadCount || 0) >= link.maxDownloads;
+  if (!link.isActive && !expired && !exhausted) return res.status(403).json({ error: 'This share link has been revoked.' });
 
   res.json({
     fileName: link.fileName,
@@ -3014,13 +3165,13 @@ ${wrong ? '<div class="err">Incorrect password. Try again.</div>' : ''}
 
 async function serveSharedLink(req: express.Request, res: express.Response, link: ExternalShareLink | null) {
   if (!link) return res.status(404).send('This share link is invalid.');
-  if (!link.isActive) return res.status(403).send('This share link has been revoked.');
   if (new Date(link.expiresAt).getTime() < Date.now()) {
     return res.status(410).send('This share link has expired.');
   }
   if (link.maxDownloads != null && (link.downloadCount || 0) >= link.maxDownloads) {
     return res.status(410).send('This share link has reached its download limit.');
   }
+  if (!link.isActive) return res.status(403).send('This share link has been revoked.');
 
   if (link.requiresPassword && link.passwordHash) {
     const cookieName = `share_${sha256Hex(link.id).slice(0, 16)}`;
@@ -3034,6 +3185,16 @@ async function serveSharedLink(req: express.Request, res: express.Response, link
   const doc = await db().getDocument(link.documentId);
   if (!doc || doc.isDeleted) return res.status(404).send('The shared document is no longer available.');
 
+  // A public link is an immutable snapshot. Never silently switch an existing
+  // link to a newer document version after the sender has distributed it.
+  // The fallback only supports legacy rows before migration 0009 is applied.
+  const sharedVersion = link.versionId
+    ? await db().getVersion(link.versionId)
+    : latestOf(await db().listVersions(doc.id));
+  if (!sharedVersion || sharedVersion.documentId !== doc.id) {
+    return res.status(404).send('The shared file version is no longer available.');
+  }
+
   const consumedLink = await db().consumeExternalLink(link.id, link.allowDownload !== false);
   if (!consumedLink) return res.status(410).send('This share link is no longer available.');
   link = consumedLink;
@@ -3045,15 +3206,12 @@ async function serveSharedLink(req: express.Request, res: express.Response, link
     `Document opened via share link (view #${link.accessCount}).`
   );
 
-  const versions = await db().listVersions(doc.id);
-  const latest = latestOf(versions);
-
-  if (latest && latest.storagePath) {
-    const url = await signedUrlFor(latest.storagePath, { download: link.allowDownload !== false ? latest.fileName : false });
+  if (sharedVersion.storagePath) {
+    const url = await signedUrlFor(sharedVersion.storagePath, { download: link.allowDownload !== false ? sharedVersion.fileName : false });
     if (url) return res.redirect(302, url);
   }
 
-  const full = latest ? await db().getVersion(latest.id) : null;
+  const full = await db().getVersion(sharedVersion.id);
   if (!full || !full.fileData) {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     return res.send(doc.ocrText || 'No content available for this document.');
@@ -3071,7 +3229,10 @@ async function serveSharedLink(req: express.Request, res: express.Response, link
 }
 
 async function unlockSharedLink(req: express.Request, res: express.Response, link: ExternalShareLink | null) {
-  if (!link || !link.isActive || !link.requiresPassword || !link.passwordHash) {
+  if (!link) return res.status(404).send('This protected share link is invalid.');
+  const unusable = !link.isActive || new Date(link.expiresAt).getTime() < Date.now()
+    || (link.maxDownloads != null && (link.downloadCount || 0) >= link.maxDownloads);
+  if (unusable || !link.requiresPassword || !link.passwordHash) {
     return res.status(404).send('This protected share link is invalid.');
   }
   const rateKey = `share:${link.id}:${requestIp(req)}`;
